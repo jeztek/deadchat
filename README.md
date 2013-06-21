@@ -1,5 +1,5 @@
 deadchat
 ========
 
-# client dependencies
+### client dependencies
 urwid	http://excess.org/urwid/
