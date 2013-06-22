@@ -4,6 +4,7 @@ import sys
 import logging
 import socket
 import select
+import string
 import threading
 import Queue
 import urwid
@@ -12,16 +13,58 @@ import urwid.curses_display
 logging.basicConfig(filename="deadchat.log", level=logging.DEBUG)
 
 
+class Command():
+    SEND_MSG, VALIDATE_NICK = range(2)
+
+    def __init__(self, type, data=None):
+        self.type = type
+        self.data = data
+
+    def serialize(self):
+        if self.type == self.SEND_MSG:
+            return "SEND_MSG " + self.data + "\n"
+        elif self.type == self.VALIDATE_NICK:
+            return "VALIDATE_NICK " + self.data + "\n"
+
+class Response():
+    MSG, NICK_VALID, NICK_INVALID, DISCONNECTED = range(4)
+
+    def __init__(self, type, data=None):
+        self.type = type
+        self.data = data
+
+
+class TransmitThread(threading.Thread):
+    def __init__(self, sock, queue):
+        super(TransmitThread, self).__init__()
+        self.sock = sock
+        self.queue = queue
+        self.enable = threading.Event()
+        self.enable.set()
+
+    def run(self):
+        while self.enable.is_set():
+            try:
+                cmd = self.queue.get(True, 0.125)
+                self.sock.sendall(cmd.serialize())
+            except Queue.Empty:
+                continue
+
+    def stop(self):
+        self.enable.clear()
+        threading.Thread.join(self)
+
+
 class ReceiveThread(threading.Thread):
     def __init__(self, sock, queue):
         super(ReceiveThread, self).__init__()
-        self.sock  = sock
+        self.sock = sock
         self.queue = queue
-        self.enabled = threading.Event()
-        self.enabled.set()
+        self.enable = threading.Event()
+        self.enable.set()
 
     def run(self):
-        while self.enabled.is_set():
+        while self.enable.is_set():
             r, w, e = select.select([self.sock], [], [], 0.125)
             for sock in r:
                 if sock == self.sock:
@@ -30,54 +73,30 @@ class ReceiveThread(threading.Thread):
                     except socket.error:
                         continue
                     if not data:
-                        # disconnected
-                        self.queue.put("server disconnect")
-                        self.enabled.clear()
+                        self.queue.put(Response(Response.DISCONNECTED))
+                        self.enable.clear()
                     else:
-                        self.queue.put(data)
-
+                        self.queue.put(Response(Response.MSG, data))
     def stop(self):
-        self.enabled.clear()
+        self.enable.clear()
         threading.Thread.join(self)
 
 
-class TransmitThread(threading.Thread):
-    def __init__(self, sock, queue):
-        super(TransmitThread, self).__init__()
-        self.sock = sock
-        self.queue = queue
-        self.enabled = threading.Event()
-        self.enabled.set()
+class DeadChatClient():
+    def __init__(self):
 
-    def run(self):
-        while self.enabled.is_set():
-            try:
-                data = self.queue.get(True, 0.125)
-                logging.debug("tx thread: " + data)
-                self.sock.sendall(data + '\n')
-            except Queue.Empty:
-                continue
+        self.nick = None
 
-    def stop(self):
-        self.enabled.clear()
-        threading.Thread.join(self)
-
-
-class Client():
-    def __init__(self, sock):
+        self.sock = None
+        self.connected = False
 
         self.txq = Queue.Queue()
         self.rxq = Queue.Queue()
 
-        tx = TransmitThread(sock, self.txq)
-        rx = ReceiveThread(sock, self.rxq)
+        self.tx_thread = None
+        self.rx_thread = None
 
-        tx.start()
-        rx.start()
-
-        self.txq.put("Eric\n")
-
-        self.enabled = True
+        self.enable = True
         self.display_size = None	# cols, rows tuple
 
         # Generate user interface
@@ -104,18 +123,47 @@ class Client():
 
         # Run main loop
         self.display.run_wrapper(self.run)
-        rx.stop()
-        tx.stop()
-        sock.close()
         
+
+    def cmd_connect(self, host, port):
+        try:
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.sock.connect((host, port))
+
+            self.tx_thread = TransmitThread(self.sock, self.txq)
+            self.tx_thread.start()
+
+            self.rx_thread = ReceiveThread(self.sock, self.rxq)
+            self.rx_thread.start()
+
+            self.connected = True
+            self.chatlog_add("Connected to " + host)
+
+            if self.nick:
+                self.txq.put(Command(Command.VALIDATE_NICK, self.nick))
+
+        except Exception as e:
+            self.chatlog_add("Unable to connect to " + host + \
+                             " on port " + str(port))
+        
+
+    def cmd_disconnect(self):
+        self.connected = False
+        self.rx_thread.stop()
+        self.tx_thread.stop()
+        self.sock.close()
+        self.chatlog_add("Disconnected from server")
 
     def run(self):
         self.display_size = self.display.get_cols_rows()
         self.display.set_input_timeouts(max_wait=0.125)
-        while self.enabled:
+        while self.enable:
             try:
-                text = self.rxq.get(False)
-                self.chatlog_add(text)
+                rx = self.rxq.get(False)
+                if rx.type == Response.MSG:
+                    self.chatlog_add(rx.data)
+                elif rx.type == Response.DISCONNECTED:
+                    self.cmd_disconnect()
             except Queue.Empty:
                 pass
 
@@ -137,9 +185,27 @@ class Client():
             text = self.ui_input.get_edit_text()
             if text != "":
                 self.ui_input.set_edit_text("")
-                self.txq.put(text)
-            if text == "/quit":
-                self.enabled = False
+                if text == "/quit":
+                    if self.connected:
+                        self.cmd_disconnect()
+                    self.enable = False
+                elif string.find(text, "/connect") == 0:
+                    self.cmd_connect("localhost", 4000)
+                elif string.find(text, "/disconnect") == 0:
+                    self.cmd_disconnect()
+                elif string.find(text, "/nick") == 0:
+                    nickstr = text.split(" ")
+                    if len(nickstr) > 1:
+                        self.nick = nickstr[1]
+                        self.chatlog_add("Set nick to " + self.nick)
+                        self.txq.put(Command(Command.VALIDATE_NICK, self.nick))
+                else:
+                    if not self.connected:
+                        self.chatlog_add("Not connected")
+                    elif not self.nick:
+                        self.chatlog_add("No nick set")
+                    else:
+                        self.txq.put(Command(Command.SEND_MSG, text))
 
         elif key == "page down":
             self.ui_listbox.keypress(self.display_size, key)
@@ -163,22 +229,7 @@ class Client():
 
 
 def main():
-    if len(sys.argv) < 3:
-        print "Usage:", sys.argv[0], "hostname port"
-        sys.exit()
-
-    host = sys.argv[1]
-    port = int(sys.argv[2])
-
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        sock.connect((host, port))
-    except:
-        print "Unable to connect to", host
-        sys.exit()
-
-    Client(sock).run()
-
+    DeadChatClient().run()
     
 if __name__ == "__main__":
     main()

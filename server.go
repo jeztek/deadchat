@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 )
 
 func error_(err error, r int) {
@@ -27,10 +28,8 @@ func (cm clientMap) Write(buf []byte) (n int, err error) {
 }
 
 func (cm clientMap) Add(name string, c net.Conn) bool {
-	for k := range cm {
-		if name == k {
-			return false
-		}
+	if cm[name] != nil {
+		return false
 	}
 	cm[name] = c
 	return true
@@ -46,29 +45,10 @@ func client(c net.Conn) {
 	defer c.Close()
 
 	br := bufio.NewReader(c)
-	fmt.Fprintf(c, "Please enter your name: ")
-	buf, err := br.ReadBytes('\n')
-	if err != nil {
-		error_(err, -1)
-		return
-	}
-
-	name := string(bytes.Trim(buf, "\t\n\r\x00"))
-	if name == "" {
-		fmt.Fprintf(c, "%v is invalid\n", name)
-	}
-
-	if !clients.Add(name, c) {
-		fmt.Fprintf(c, "%v is not available\n", name)
-		return
-	}
-
-	fmt.Fprintf(clients, "%v connected\n", name)
-	defer fmt.Fprintf(clients, "%v disconnected\n", name)
-	defer delete(clients, name)
+	name := ""
 
 	for {
-		buf, err = br.ReadBytes('\n')
+		buf, err := br.ReadBytes('\n')
 		if err != nil {
 			break
 		}
@@ -78,11 +58,29 @@ func client(c net.Conn) {
 		}
 
 		switch {
-		default:
-			buf = append([]byte("<"+name+"> "), buf...)
-		}
+		case strings.Contains(string(buf), "VALIDATE_NICK"):
+			name = strings.TrimPrefix(string(buf), "VALIDATE_NICK ")
+			if !clients.Add(name, c) {
+				fmt.Fprintf(c, "NICK_INVALID\n")
+				return
+			} else {
+				fmt.Fprintf(c, "NICK_VALID\n")
+				fmt.Fprintf(clients, "%v connected\n", name)
+				fmt.Printf("%v connected\n", name)
+				defer fmt.Fprintf(clients, "%v disconnected\n", name)
+				defer fmt.Printf("%v disconnected\n", name)
+				defer delete(clients, name)
+			}
 
-		fmt.Fprintf(clients, "%v\n", string(buf))
+		default:
+			if name != "" {
+				msg := "<" + name + "> " + strings.TrimPrefix(string(buf), "SEND_MSG ")
+				fmt.Fprintf(clients, "%v\n", msg)
+				fmt.Printf("%v\n", msg)
+			} else {
+				fmt.Fprintf(c, "NICK_INVALID\n")
+			}
+		}
 	}
 }
 
