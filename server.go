@@ -28,7 +28,8 @@ func (cm clientMap) Write(buf []byte) (n int, err error) {
 }
 
 func (cm clientMap) Add(name string, c net.Conn) bool {
-	if cm[name] != nil {
+	_, present := cm[name]
+	if present {
 		return false
 	}
 	cm[name] = c
@@ -48,6 +49,7 @@ func client(c net.Conn) {
 	name := ""
 
 	for {
+		// Read bytes from client
 		buf, err := br.ReadBytes('\n')
 		if err != nil {
 			break
@@ -57,28 +59,31 @@ func client(c net.Conn) {
 			continue
 		}
 
+		// Decode command from client
 		switch {
 		case strings.Contains(string(buf), "VALIDATE_NICK"):
-			name = strings.TrimPrefix(string(buf), "VALIDATE_NICK ")
-			if !clients.Add(name, c) {
-				fmt.Fprintf(c, "NICK_INVALID\n")
-				return
+			if name == "" {
+				name = strings.TrimPrefix(string(buf), "VALIDATE_NICK ")
+				if clients.Add(name, c) {
+					fmt.Fprintf(clients, "%v connected", name)
+					fmt.Printf("%v connected\n", name)
+					defer fmt.Fprintf(clients, "%v disconnected", name)
+					defer fmt.Printf("%v disconnected\n", name)
+					defer delete(clients, name)
+				} else {
+					fmt.Fprintf(c, "Nick already exists")
+					return
+				}
 			} else {
-				fmt.Fprintf(c, "NICK_VALID\n")
-				fmt.Fprintf(clients, "%v connected\n", name)
-				fmt.Printf("%v connected\n", name)
-				defer fmt.Fprintf(clients, "%v disconnected\n", name)
-				defer fmt.Printf("%v disconnected\n", name)
-				defer delete(clients, name)
+				fmt.Fprintf(c, "Nick already set")
 			}
-
 		default:
 			if name != "" {
 				msg := "<" + name + "> " + strings.TrimPrefix(string(buf), "SEND_MSG ")
-				fmt.Fprintf(clients, "%v\n", msg)
+				fmt.Fprintf(clients, "%v", msg)
 				fmt.Printf("%v\n", msg)
 			} else {
-				fmt.Fprintf(c, "NICK_INVALID\n")
+				fmt.Fprintf(c, "Nick not set")
 			}
 		}
 	}

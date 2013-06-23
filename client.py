@@ -1,5 +1,12 @@
 #!/usr/bin/env python
 
+"""
+TODO:
+* binary protocol
+* crypto
+
+"""
+
 import sys
 import logging
 import socket
@@ -22,12 +29,14 @@ class Command():
 
     def serialize(self):
         if self.type == self.SEND_MSG:
-            return "SEND_MSG " + self.data + "\n"
+            ret = u"SEND_MSG " + self.data + u"\n"
+            return ret.encode('utf-8')
         elif self.type == self.VALIDATE_NICK:
-            return "VALIDATE_NICK " + self.data + "\n"
+            ret = u"VALIDATE_NICK " + self.data + u"\n"
+            return ret.encode('utf-8')
 
 class Response():
-    MSG, NICK_VALID, NICK_INVALID, DISCONNECTED = range(4)
+    MSG, DISCONNECTED = range(2)
 
     def __init__(self, type, data=None):
         self.type = type
@@ -103,8 +112,8 @@ class DeadChatClient():
         self.chatlog = urwid.SimpleListWalker([])
         self.ui_listbox = urwid.ListBox(self.chatlog)
         self.ui_listbox.set_focus(len(self.chatlog)-1)
-        self.ui_status = urwid.Text(" #chatroom")
-        self.ui_input = urwid.Edit(">> ")
+        self.ui_status = urwid.Text(u" deadchat")
+        self.ui_input = urwid.Edit(u">> ")
         ui_header = urwid.AttrMap(urwid.Text(""), 'header')
         ui_footer = urwid.Pile([
             urwid.AttrMap(self.ui_status, 'status'),
@@ -125,7 +134,7 @@ class DeadChatClient():
         self.display.run_wrapper(self.run)
         
 
-    def cmd_connect(self, host, port):
+    def cmd_connect(self, nick, host, port):
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.sock.connect((host, port))
@@ -137,14 +146,14 @@ class DeadChatClient():
             self.rx_thread.start()
 
             self.connected = True
-            self.chatlog_add("Connected to " + host)
+            self.chatlog_add(u"Connected to " + host)
 
-            if self.nick:
-                self.txq.put(Command(Command.VALIDATE_NICK, self.nick))
+            self.nick = nick
+            self.txq.put(Command(Command.VALIDATE_NICK, self.nick))
 
         except Exception as e:
-            self.chatlog_add("Unable to connect to " + host + \
-                             " on port " + str(port))
+            self.chatlog_add(u"Unable to connect to " + host + \
+                             u" on port " + str(port))
         
 
     def cmd_disconnect(self):
@@ -152,7 +161,7 @@ class DeadChatClient():
         self.rx_thread.stop()
         self.tx_thread.stop()
         self.sock.close()
-        self.chatlog_add("Disconnected from server")
+        self.chatlog_add(u"Disconnected from server")
 
     def run(self):
         self.display_size = self.display.get_cols_rows()
@@ -190,22 +199,25 @@ class DeadChatClient():
                         self.cmd_disconnect()
                     self.enable = False
                 elif string.find(text, "/connect") == 0:
-                    self.cmd_connect("localhost", 4000)
-                elif string.find(text, "/disconnect") == 0:
-                    self.cmd_disconnect()
-                elif string.find(text, "/nick") == 0:
-                    nickstr = text.split(" ")
-                    if len(nickstr) > 1:
-                        self.nick = nickstr[1]
-                        self.chatlog_add("Set nick to " + self.nick)
-                        self.txq.put(Command(Command.VALIDATE_NICK, self.nick))
-                else:
-                    if not self.connected:
-                        self.chatlog_add("Not connected")
-                    elif not self.nick:
-                        self.chatlog_add("No nick set")
+                    if self.connected:
+                        self.chatlog_add(u"Already connected")
                     else:
+                        connstr = text.split(" ")
+                        if len(connstr) > 1:
+                            nick = connstr[1]
+                            self.cmd_connect(nick, "localhost", 4000)
+                        else:
+                            self.chatlog_add(u"Missing nick")
+                elif string.find(text, "/disconnect") == 0:
+                    if self.connected:
+                        self.cmd_disconnect()
+                    else:
+                        self.chatlog_add(u"Not connected")
+                else:
+                    if self.connected:
                         self.txq.put(Command(Command.SEND_MSG, text))
+                    else:
+                        self.chatlog_add(u"Not connected")
 
         elif key == "page down":
             self.ui_listbox.keypress(self.display_size, key)
