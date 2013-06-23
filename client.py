@@ -8,6 +8,7 @@ TODO:
 """
 
 import sys
+import base64
 import logging
 import socket
 import select
@@ -16,6 +17,10 @@ import threading
 import Queue
 import urwid
 import urwid.curses_display
+import nacl.utils
+import nacl.public
+import nacl.secret
+import ConfigParser
 
 logging.basicConfig(filename="deadchat.log", level=logging.DEBUG)
 
@@ -29,8 +34,8 @@ class Command():
 
     def serialize(self):
         if self.type == self.SEND_MSG:
-            ret = u"SEND_MSG " + self.data + u"\n"
-            return ret.encode('utf-8')
+#            return u"SEND_MSG " + base64.b64encode(self.data) + u"\n"
+            return u"SEND_MSG " + self.data + u"\n"
         elif self.type == self.VALIDATE_NICK:
             ret = u"VALIDATE_NICK " + self.data + u"\n"
             return ret.encode('utf-8')
@@ -95,7 +100,12 @@ class DeadChatClient():
     def __init__(self):
 
         self.nick = None
-
+        self.id_public_key = None
+        self.id_private_key = None
+        
+        self.shared_key = None
+        self.secretbox = None
+        
         self.sock = None
         self.connected = False
 
@@ -134,7 +144,42 @@ class DeadChatClient():
         self.display.run_wrapper(self.run)
         
 
-    def cmd_connect(self, nick, host, port):
+    def load_config(self):
+        self.config.read("deadchat.cfg")
+        if self.config.has_section("id"):
+            try:
+                self.id_private_key = nacl.public.PrivateKey(base64.b64decode(self.config.get("id", "id_private_key")))
+                self.id_public_key = nacl.public.PublicKey(base64.b64decode(self.config.get("id", "id_public_key")))
+                self.nick = self.config.get("id", "nick")
+                self.chatlog_add("Nick set to " + self.nick)
+            except:
+                pass
+
+        if self.config.has_section("room"):
+            try:
+                self.shared_key = base64.b64decode(self.config.get("room", "room_key"))
+                self.secretbox = nacl.secret.SecretBox(self.shared_key)
+            except:
+                pass
+
+
+    def cmd_createid(self, nick):
+        self.nick = nick
+        key = nacl.public.PrivateKey.generate()
+        self.id_private_key = key
+        self.id_public_key = key.public_key
+
+        self.chatlog_add(u"Created identity " + self.nick)
+        if not self.config.has_section("id"):
+            self.config.add_section("id")
+        self.config.set("id", "id_private_key", base64.b64encode(self.id_private_key.encode()))
+        self.config.set("id", "id_public_key", base64.b64encode(self.id_public_key.encode()))
+        self.config.set("id", "nick", self.nick)
+        with open("deadchat.cfg", "wb") as configfile:
+            self.config.write(configfile)
+
+        
+    def cmd_connect(self, host, port):
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.sock.connect((host, port))
@@ -148,7 +193,6 @@ class DeadChatClient():
             self.connected = True
             self.chatlog_add(u"Connected to " + host)
 
-            self.nick = nick
             self.txq.put(Command(Command.VALIDATE_NICK, self.nick))
 
         except Exception as e:
@@ -166,11 +210,19 @@ class DeadChatClient():
     def run(self):
         self.display_size = self.display.get_cols_rows()
         self.display.set_input_timeouts(max_wait=0.125)
+
+        self.config = ConfigParser.ConfigParser()
+        self.load_config()
+
         while self.enable:
             try:
                 rx = self.rxq.get(False)
                 if rx.type == Response.MSG:
-                    self.chatlog_add(rx.data)
+                    if self.secretbox:
+                        data = rx.data.split(" ")
+                        enc = base64.b64decode(data[1])
+                        msg = self.secretbox.decrypt(enc[24:], enc[:24])
+                        self.chatlog_add(data[0] + " " + msg)
                 elif rx.type == Response.DISCONNECTED:
                     self.cmd_disconnect()
             except Queue.Empty:
@@ -198,14 +250,18 @@ class DeadChatClient():
                     if self.connected:
                         self.cmd_disconnect()
                     self.enable = False
+                elif string.find(text, "/createid") == 0:
+                    idstr = text.split(" ")
+                    if len(idstr) > 1:
+                        self.cmd_createid(idstr[1])
+                    else:
+                        self.chatlog_add("Missing nick")
                 elif string.find(text, "/connect") == 0:
                     if self.connected:
                         self.chatlog_add(u"Already connected")
                     else:
-                        connstr = text.split(" ")
-                        if len(connstr) > 1:
-                            nick = connstr[1]
-                            self.cmd_connect(nick, "localhost", 4000)
+                        if self.nick:
+                            self.cmd_connect("localhost", 4000)
                         else:
                             self.chatlog_add(u"Missing nick")
                 elif string.find(text, "/disconnect") == 0:
@@ -213,9 +269,24 @@ class DeadChatClient():
                         self.cmd_disconnect()
                     else:
                         self.chatlog_add(u"Not connected")
+                elif string.find(text, "/genkey") == 0:
+                    self.shared_key = nacl.utils.random(32)
+                    self.secretbox = nacl.secret.SecretBox(self.shared_key)
+                    if not self.config.has_section("room"):
+                        self.config.add_section("room")
+                    self.config.set("room", "room_key", base64.b64encode(self.shared_key))
+                    with open("deadchat.cfg", "wb") as configfile:
+                        self.config.write(configfile)
+                    self.chatlog_add("Room key generated")
                 else:
                     if self.connected:
-                        self.txq.put(Command(Command.SEND_MSG, text))
+                        if not self.secretbox:
+                            self.chatlog_add(u"Missing room key")
+                        else:
+                            nonce = nacl.utils.random(24)
+                            enc = self.secretbox.encrypt(text.encode('utf-8'), nonce)
+                            enc = base64.b64encode(enc)
+                            self.txq.put(Command(Command.SEND_MSG, enc))
                     else:
                         self.chatlog_add(u"Not connected")
 

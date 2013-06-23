@@ -65,9 +65,9 @@ func client(c net.Conn) {
 			if name == "" {
 				name = strings.TrimPrefix(string(buf), "VALIDATE_NICK ")
 				if clients.Add(name, c) {
-					fmt.Fprintf(clients, "%v connected", name)
+//					fmt.Fprintf(clients, "%v connected", name)
 					fmt.Printf("%v connected\n", name)
-					defer fmt.Fprintf(clients, "%v disconnected", name)
+//					defer fmt.Fprintf(clients, "%v disconnected", name)
 					defer fmt.Printf("%v disconnected\n", name)
 					defer delete(clients, name)
 				} else {
