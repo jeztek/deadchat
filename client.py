@@ -2,7 +2,6 @@
 
 """
 TODO:
-* binary protocol
 * crypto
 
 """
@@ -24,24 +23,41 @@ import ConfigParser
 
 logging.basicConfig(filename="deadchat.log", level=logging.DEBUG)
 
-
+# Packet
+# [header] [packet len except header (4)] [type (1)] [packet data]
 class Command():
-    SEND_MSG, VALIDATE_NICK = range(2)
+    CMD_MSGALL, CMD_MSGTO, CMD_IDENT, CMD_AUTH, CMD_GETPK, CMD_WHO = range(6)
 
-    def __init__(self, type, data=None):
+    def __init__(self, type, name, data=None):
         self.type = type
+        self.name = name
         self.data = data
-
+        
     def serialize(self):
-        if self.type == self.SEND_MSG:
-#            return u"SEND_MSG " + base64.b64encode(self.data) + u"\n"
-            return u"SEND_MSG " + self.data + u"\n"
-        elif self.type == self.VALIDATE_NICK:
-            ret = u"VALIDATE_NICK " + self.data + u"\n"
-            return ret.encode('utf-8')
+        if self.type == self.CMD_MSGALL:
+            msg = self.data.encode('utf-8')
+            msglen = len(msg)
+            return struct.pack("!cIB", '\xde', msglen + 1, self.type) \
+                   + msg
+
+        elif self.type == self.CMD_MSGTO:
+            msg = self.data.encode('utf-8')
+            msglen = len(msg)
+            name = self.name.encode('utf-8')
+            namelen = len(name)
+            return struct.pack("!cIB", '\xde', namelen + msglen + 3, \
+                               self.type) + struct.pack("H", namelen) + \
+                               name + msg
+        
+        elif self.type == self.CMD_IDENT:
+            name = self.name.encode('utf-8')
+            namelen = len(name)
+            return struct.pack("!cIB", '\xde', namelen + 1, self.type) + name
+        
+        
 
 class Response():
-    MSG, DISCONNECTED = range(2)
+    SVR_NOTICE, SVR_MSG, SVR_IDENT, SVR_AUTH_VALID, SVR_PK, SVR_WHO = range(6, 12)
 
     def __init__(self, type, data=None):
         self.type = type
@@ -60,7 +76,11 @@ class TransmitThread(threading.Thread):
         while self.enable.is_set():
             try:
                 cmd = self.queue.get(True, 0.125)
-                self.sock.sendall(cmd.serialize())
+                cmd = cmd.serialize()
+                sent = 0
+                cmdlen = len(cmd)
+                while sent < cmdlen:
+                    sent += self.sock.send(cmd[sent:])
             except Queue.Empty:
                 continue
 
@@ -79,18 +99,29 @@ class ReceiveThread(threading.Thread):
 
     def run(self):
         while self.enable.is_set():
+            prevdata = None
             r, w, e = select.select([self.sock], [], [], 0.125)
             for sock in r:
                 if sock == self.sock:
                     try:
                         data = sock.recv(4096)
+                        if not data:
+                            self.queue.put(Response(Response.DISCONNECTED))
+                            self.enable.clear()
+                        else:
+                            # Drop bytes before header
+                            pkt = data[data.find('\xde'):]
+                            rtype = pkt[1]
+                            rlen = struct.unpack("!I", pkt[2:5])
+                            received = 0
+                            data = pkt[6:]
+                            while received < rlen:
+                                data += sock.recv(rlen - received)
+                                received += len(data)
+                            self.queue.put(Response(rtype, data))
+
                     except socket.error:
                         continue
-                    if not data:
-                        self.queue.put(Response(Response.DISCONNECTED))
-                        self.enable.clear()
-                    else:
-                        self.queue.put(Response(Response.MSG, data))
     def stop(self):
         self.enable.clear()
         threading.Thread.join(self)
@@ -193,7 +224,7 @@ class DeadChatClient():
             self.connected = True
             self.chatlog_add(u"Connected to " + host)
 
-            self.txq.put(Command(Command.VALIDATE_NICK, self.nick))
+            self.txq.put(Command(Command.IDENT, self.nick))
 
         except Exception as e:
             self.chatlog_add(u"Unable to connect to " + host + \
@@ -219,10 +250,10 @@ class DeadChatClient():
                 rx = self.rxq.get(False)
                 if rx.type == Response.MSG:
                     if self.secretbox:
-                        data = rx.data.split(" ")
-                        enc = base64.b64decode(data[1])
-                        msg = self.secretbox.decrypt(enc[24:], enc[:24])
-                        self.chatlog_add(data[0] + " " + msg)
+                        nicklen = struct.unpack("!I", rx.data[0:3])
+                        nick = rxdata[4:nicklen-1]
+                        msg = self.secretbox.decrypt(rx.data[4+nicklen+24:], rx.data[:4+nicklen+24])
+                        self.chatlog_add("<" + nick + "> " + msg)
                 elif rx.type == Response.DISCONNECTED:
                     self.cmd_disconnect()
             except Queue.Empty:
@@ -284,9 +315,8 @@ class DeadChatClient():
                             self.chatlog_add(u"Missing room key")
                         else:
                             nonce = nacl.utils.random(24)
-                            enc = self.secretbox.encrypt(text.encode('utf-8'), nonce)
-                            enc = base64.b64encode(enc)
-                            self.txq.put(Command(Command.SEND_MSG, enc))
+                            enc = self.secretbox.encrypt(self.data.encode('utf-8'), nonce)
+                            self.txq.put(Command(Command.MSG, enc))
                     else:
                         self.chatlog_add(u"Not connected")
 

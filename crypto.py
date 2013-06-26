@@ -35,6 +35,7 @@ print str(dec)
 # print base64.b64encode(enc.ciphertext)
 # print box.decrypt(enc.ciphertext, enc.nonce)
 
+
 """
 Need:
 * secret key exchange
@@ -70,5 +71,9 @@ client commands:
 /genkey - set room key and store in file
 /requestkey - request room key
 /sendkey <nick> - send key to user
+
+
+unicode.encode() => bytes
+bytes.decode() => unicode
 
 """

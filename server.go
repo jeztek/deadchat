@@ -3,11 +3,11 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"net"
 	"os"
-	"strings"
 )
 
 func error_(err error, r int) {
@@ -36,38 +36,191 @@ func (cm clientMap) Add(name string, c net.Conn) bool {
 	return true
 }
 
+const HEADER_BYTE byte = '\xde'
+
+const (
+	// Commands from client
+	CMD_MSGALL = iota
+	CMD_MSGTO
+	CMD_IDENT
+	CMD_AUTH
+	CMD_GETPK
+	CMD_WHO
+
+	// Responses from server
+	SVR_NOTICE
+	SVR_MSG
+	SVR_IDENT
+	SVR_AUTH_VALID
+	SVR_PK
+	SVR_WHO
+)
+
+type ClientInfo struct {
+	conn net.Conn
+	name string
+}
+
 var clients clientMap
 
 func init() {
 	clients = make(clientMap)
 }
 
+// Packet:
+// [header] [packet len except header (4)] [type (1)] [packet data]
 func client(c net.Conn) {
 	defer c.Close()
 
+	var info ClientInfo
+	info.conn = c
+
 	br := bufio.NewReader(c)
+	
+	for {
+		_, err := br.ReadBytes(HEADER_BYTE)
+		if err != nil {
+			break
+		}
+
+		packet := make([]byte, 4)
+		read_bytes := 0
+		for read_bytes < 4 {
+			tmp := make([]byte, 4)
+			nread, err := br.Read(tmp)
+			if err != nil {
+				break
+			}
+			copy(packet[read_bytes:], tmp[:nread])
+			read_bytes += nread
+		}
+		
+		pktlen := int(binary.BigEndian.Uint32(packet))
+		packet = make([]byte, pktlen)
+		read_bytes = 0
+		for read_bytes < pktlen {
+			tmp := make([]byte, pktlen)
+			nread, err := br.Read(tmp)
+			if err != nil {
+				break
+			}
+			copy(packet[read_bytes:], tmp[:nread])
+			read_bytes += nread
+		}
+
+		parse(&info, packet)
+	}
+	svr_notice_all(info.name + " disconnected")
+}
+
+func parse(info *ClientInfo, packet []byte) {
+	fmt.Printf("rx: ")
+	for i := 0; i < len(packet); i++ {
+		fmt.Printf("%02x ", packet[i])
+	}
+	fmt.Printf("\n")
+
+	cmd := packet[0]
+	switch {
+	case cmd == CMD_MSGALL:
+		if info.name == "" {
+			svr_notice(info.conn, "name not set")
+		} else {
+			cmd_msgall(info.name, packet[1:])
+		}
+	case cmd == CMD_IDENT:
+		cmd_ident(info, packet[1:])
+		fmt.Printf("name: %s\n", info.name)
+	default:
+	}
+}
+
+func packetize(packet_type byte, payload []byte) []byte {
+	var buf bytes.Buffer
+	buf.Write([]byte{ HEADER_BYTE })
+	binary.Write(&buf, binary.BigEndian, uint32(len(payload)+1))
+	buf.Write([]byte{ packet_type })
+	buf.Write(payload)
+
+	var pkt []byte = buf.Bytes()
+	fmt.Printf("tx: ")
+	for i := 0; i < len(pkt); i++ {
+		fmt.Printf("%02x ", pkt[i])
+	}
+	fmt.Printf("\n")
+	return buf.Bytes()
+}
+
+func svr_notice(c net.Conn, msg string) (int, error) {
+	return c.Write(packetize(byte(SVR_NOTICE), []byte(msg)))
+}
+
+func svr_notice_all(msg string) (int, error) {
+	return clients.Write(packetize(byte(SVR_NOTICE), []byte(msg)))
+}
+
+func svr_auth_valid(c net.Conn) (int, error) {
+	return c.Write(packetize(byte(SVR_AUTH_VALID), []byte{}))
+}
+
+func cmd_msgall(sender string, data []byte) (int, error) {
+	var buf bytes.Buffer
+	binary.Write(&buf, binary.BigEndian, uint16(len(sender)))
+	buf.Write([]byte(sender))
+	buf.Write(data)
+	return clients.Write(packetize(SVR_MSG, buf.Bytes()))
+}
+
+func cmd_ident(info *ClientInfo, data []byte) {
+	name := string(data)
+
+	if len(name) > 65535 {
+		svr_notice(info.conn, "invalid name")
+		return
+	}
+
+	if !clients.Add(name, info.conn) {
+		svr_notice(info.conn, name + " is already connected")
+		return
+	}
+
+	svr_auth_valid(info.conn)
+	svr_notice_all(name + " connected")
+	info.name = name
+}
+
+
+/*
 	name := ""
 
 	for {
 		// Read bytes from client
-		buf, err := br.ReadBytes('\n')
+		br.ReadBytes('\xde')
+
+		var buf []byte
+		nread, err := br.Read(buf)
 		if err != nil {
 			break
 		}
-		buf = bytes.Trim(buf, "\t\n\r\x00")
-		if len(buf) == 0 {
-			continue
+
+		ctype := buf[0]
+		clen := binary.Uvarint(buf[1:4])
+		data := buf[5:]
+		if len(data) < clen {
+			for len(data) < clen {
+				nread, err = br.Read(buf)
+				data += buf
+			}
 		}
 
 		// Decode command from client
 		switch {
-		case strings.Contains(string(buf), "VALIDATE_NICK"):
+		case ctype == 1:
+			name = data
 			if name == "" {
-				name = strings.TrimPrefix(string(buf), "VALIDATE_NICK ")
 				if clients.Add(name, c) {
 //					fmt.Fprintf(clients, "%v connected", name)
 					fmt.Printf("%v connected\n", name)
-//					defer fmt.Fprintf(clients, "%v disconnected", name)
 					defer fmt.Printf("%v disconnected\n", name)
 					defer delete(clients, name)
 				} else {
@@ -79,8 +232,19 @@ func client(c net.Conn) {
 			}
 		default:
 			if name != "" {
-				msg := "<" + name + "> " + strings.TrimPrefix(string(buf), "SEND_MSG ")
-				fmt.Fprintf(clients, "%v", msg)
+				var msg []byte
+				var tmp []byte
+				append(msg, '\xde', '\x00')
+				var nicklen []byte
+				binary.PutUvarint(nicklen, len(name))
+				append(tmp, nicklen...)
+				append(tmp, name...)
+				append(tmp, data...)
+				var pktlen []byte
+				binary.PutUvarint(pktlen, len(tmp))
+				append(msg, pktlen...)
+				append(msg, tmp...)
+				clients.Write(msg)
 				fmt.Printf("%v\n", msg)
 			} else {
 				fmt.Fprintf(c, "Nick not set")
@@ -88,6 +252,7 @@ func client(c net.Conn) {
 		}
 	}
 }
+*/
 
 func main() {
 	var (
