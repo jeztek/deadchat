@@ -14,6 +14,7 @@ import urwid.curses_display
 import nacl.utils
 import nacl.public
 import nacl.secret
+import nacl.exceptions
 import ConfigParser
 
 logging.basicConfig(filename="deadchat.log", level=logging.DEBUG)
@@ -23,6 +24,8 @@ logging.basicConfig(filename="deadchat.log", level=logging.DEBUG)
 class Command():
     CMD_MSGALL, CMD_MSGTO, CMD_IDENT, CMD_AUTH, CMD_GETPK, CMD_WHO = range(6)
 
+    MSG_REQKEY, MSG_SENDKEY, MSG_PUBKEYENC, MSG_SHAREKEYENC = range(4)
+
     def __init__(self, txq):
         self.queue = txq
 
@@ -30,28 +33,41 @@ class Command():
         pktlen = len(payload) + 1
         return struct.pack("!cIB", '\xde', pktlen, command) + payload
 
-    # [data]
-    def msgall(self, data):
-        packet = self.packetize(Command.CMD_MSGALL, data)
+    def msgall_enc(self, data):
+        payload = struct.pack("!B", Command.MSG_SHAREKEYENC) + data
+        packet = self.packetize(Command.CMD_MSGALL, payload)
         self.queue.put(packet)
 
-    # [target name length (2)] [target name] [data]
-    def msgto(self, recipient, data):
+    def msgall_reqkey(self):
+        payload = struct.pack("!B", Command.MSG_REQKEY)
+        packet = self.packetize(Command.CMD_MSGALL, payload)
+        self.queue.put(packet)
+
+    # [target name length (2)] [target name] [msgtype (1)] [data]
+    def msgto_enc(self, recipient, data):
         payload = struct.pack("!H", len(recipient))
         payload += recipient.encode('utf-8')
+        payload += struct.pack("!B", Command.MSG_PUBKEYENC)
         payload += data
         packet = self.packetize(Command.CMD_MSGTO, payload)
         self.queue.put(packet)
 
-    # [name]
+    def msgto_sendkey(self, recipient, data):
+        payload = struct.pack("!H", len(recipient))
+        payload += recipient.encode('utf-8')
+        payload += struct.pack("!B", Command.MSG_SENDKEY)
+        payload += data
+        packet = self.packetize(Command.CMD_MSGTO, payload)
+        self.queue.put(packet)
+
     def ident(self, name):
         packet = self.packetize(Command.CMD_IDENT, name.encode('utf-8'))
         self.queue.put(packet)
 
     def auth(self):
+        # TODO
         pass
 
-    # [name]
     def getpk(self, name):
         packet = self.packetize(Command.CMD_GETPK, name.encode('utf-8'))
         self.queue.put(packet)
@@ -265,7 +281,7 @@ class DeadChatClient():
             if rx.type == Response.DISCONNECTED:
                 self.user_disconnect()
         else:
-            rxtype = struct.unpack("B", rx[5])[0]
+            rxtype = struct.unpack("!B", rx[5])[0]
 
             # SVR_NOTICE
             if rxtype == Response.SVR_NOTICE:
@@ -274,26 +290,40 @@ class DeadChatClient():
 
             # SVR_MSG
             elif rxtype == Response.SVR_MSG:
-                if self.secretbox:
-                    namelen = struct.unpack("!H", rx[6:8])[0]
-                    name = rx[8:8+namelen]
-                    msg = self.secretbox.decrypt(rx[8+namelen+24:], rx[8+namelen:8+namelen+24])
-                    self.chatlog_print("<" + name + "> " + msg)
+                namelen = struct.unpack("!H", rx[6:8])[0]
+                name = rx[8:8+namelen]
+                msgtype = struct.unpack("!B", rx[8+namelen])[0]
+
+                if msgtype == Command.MSG_REQKEY:
+                    self.svr_msg_requestkey(name)
+                elif msgtype == Command.MSG_SENDKEY:
+                    data = rx[8+namelen+1:]
+                    self.svr_msg_sendkey(name, data)
+                elif msgtype == Command.MSG_PUBKEYENC:
+                    data = rx[8+namelen+1:]
+                    self.svr_msg_pubkeyenc(name, data)
+                elif msgtype == Command.MSG_SHAREKEYENC:
+                    data = rx[8+namelen+1:]
+                    self.svr_msg_sharekeyenc(name, data)
 
             # SVR_IDENT
             elif rxtype == Response.SVR_IDENT:
+                # TODO
                 pass
 
             # SVR_AUTH_VALID
             elif rxtype == Response.SVR_AUTH_VALID:
+                # TODO
                 self.chatlog_print("Identity confirmed")
 
             # SVR_PK
             elif rxtype == Response.SVR_PK:
+                # TODO
                 pass
 
             # SVR_WHO
             elif rxtype == Response.SVR_WHO:
+                # TODO
                 pass
 
 
@@ -358,9 +388,10 @@ class DeadChatClient():
                 if not self.secretbox:
                     self.chatlog_print("Missing room key")
                 else:
+                    # TODO: fix this nonce so it has a unique prefix
                     nonce = nacl.utils.random(24)
                     enc = self.secretbox.encrypt(text.encode('utf-8'), nonce)
-                    self.send_cmd.msgall(enc)
+                    self.send_cmd.msgall_enc(enc)
             else:
                 self.chatlog_print("Not connected")
 
@@ -439,15 +470,49 @@ class DeadChatClient():
         self.config.set("room", "room_key", base64.b64encode(self.shared_key))
         with open("deadchat.cfg", "wb") as configfile:
             self.config.write(configfile)
-        self.chatlog_print("Room key generated")
+        self.chatlog_print("Key generated")
 
 
     def user_requestkey(self):
-        pass
+        self.send_cmd.msgall_reqkey()
 
 
     def user_sendkey(self, name):
+        # TODO: fix this so it encrypts key with recipient's public key first
+        key = self.shared_key
+        self.send_cmd.msgto_sendkey(name, key)
+
+
+    def svr_msg_requestkey(self, sender):
+        self.chatlog_print(sender + " requests the key")
+
+
+    def svr_msg_sendkey(self, sender, data):
+        # TODO: decrypt shared key using private key
+        self.shared_key = data
+        self.secretbox = nacl.secret.SecretBox(self.shared_key)
+        if not self.config.has_section("room"):
+            self.config.add_section("room")
+        self.config.set("room", "room_key", base64.b64encode(self.shared_key))
+        self.chatlog_print(sender + " has sent you the key")
+
+
+    def svr_msg_pubkeyenc(self, sender, data):
+        # TODO
         pass
+
+
+    def svr_msg_sharekeyenc(self, sender, data):
+        nonce = data[0:24]
+        enc = data[24:]
+        if self.secretbox:
+            try:
+                msg = self.secretbox.decrypt(enc, nonce)
+                self.chatlog_print("<" + sender + "> " + msg)
+                return
+            except nacl.exceptions.CryptoError:
+                pass
+        self.chatlog_print("<" + sender + "> ( encrypted )")
 
         
 def main():
