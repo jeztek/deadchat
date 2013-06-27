@@ -176,7 +176,9 @@ class DeadChatClient():
         self.ui_listbox = urwid.ListBox(self.chatlog)
         self.ui_listbox.set_focus(len(self.chatlog)-1)
         self.ui_status = urwid.Text(" deadchat")
-        self.ui_input = urwid.Edit(">> ")
+        # Use unicode for parameters here otherwise urwid won't
+        # accept unicode user input
+        self.ui_input = urwid.Edit(u">> ")
         ui_header = urwid.AttrMap(urwid.Text(""), 'header')
         ui_footer = urwid.Pile([
             urwid.AttrMap(self.ui_status, 'status'),
