@@ -1,5 +1,8 @@
 #!/usr/bin/env python
 
+# TODO:
+# SSL connection to server
+
 import sys
 import base64
 import logging
@@ -22,9 +25,10 @@ logging.basicConfig(filename="deadchat.log", level=logging.DEBUG)
 # Packet
 # [header] [packet len except header (4)] [type (1)] [payload]
 class Command():
-    CMD_MSGALL, CMD_MSGTO, CMD_IDENT, CMD_AUTH, CMD_GETPK, CMD_WHO = range(6)
+    CMD_MSGALL, CMD_MSGTO, CMD_IDENT, CMD_WHO = range(4)
 
-    MSG_REQKEY, MSG_SENDKEY, MSG_PUBKEYENC, MSG_SHAREKEYENC = range(4)
+    MSG_REQ_SHAREKEY, MSG_SEND_SHAREKEY, MSG_ENC_SHAREKEY, \
+    MSG_REQ_PUBKEY, MSG_SEND_PUBKEY, MSG_ENC_PUBKEY = range(6)
 
     def __init__(self, txq):
         self.queue = txq
@@ -33,29 +37,43 @@ class Command():
         pktlen = len(payload) + 1
         return struct.pack("!cIB", '\xde', pktlen, command) + payload
 
-    def msgall_enc(self, data):
-        payload = struct.pack("!B", Command.MSG_SHAREKEYENC) + data
+    def msg_req_sharekey(self):
+        payload = struct.pack("!B", Command.MSG_REQ_SHAREKEY)
         packet = self.packetize(Command.CMD_MSGALL, payload)
         self.queue.put(packet)
 
-    def msgall_reqkey(self):
-        payload = struct.pack("!B", Command.MSG_REQKEY)
+    def msg_enc_sharekey(self, data):
+        payload = struct.pack("!B", Command.MSG_ENC_SHAREKEY) + data
         packet = self.packetize(Command.CMD_MSGALL, payload)
         self.queue.put(packet)
 
-    # [target name length (2)] [target name] [msgtype (1)] [data]
-    def msgto_enc(self, recipient, data):
+    def msg_send_sharekey(self, recipient, data):
         payload = struct.pack("!H", len(recipient))
         payload += recipient.encode('utf-8')
-        payload += struct.pack("!B", Command.MSG_PUBKEYENC)
+        payload += struct.pack("!B", Command.MSG_SEND_SHAREKEY)
         payload += data
         packet = self.packetize(Command.CMD_MSGTO, payload)
         self.queue.put(packet)
 
-    def msgto_sendkey(self, recipient, data):
+    def msg_req_pubkey(self, recipient):
         payload = struct.pack("!H", len(recipient))
         payload += recipient.encode('utf-8')
-        payload += struct.pack("!B", Command.MSG_SENDKEY)
+        payload += struct.pack("!B", Command.MSG_REQ_PUBKEY)
+        packet = self.packetize(Command.CMD_MSGTO, payload)
+        self.queue.put(packet)
+
+    def msg_send_pubkey(self, recipient, data):
+        payload = struct.pack("!H", len(recipient))
+        payload += recipient.encode('utf-8')
+        payload += struct.pack("!B", Command.MSG_SEND_PUBKEY)
+        payload += data
+        packet = self.packetize(Command.CMD_MSGTO, payload)
+        self.queue.put(packet)
+
+    def msg_enc_pubkey(self, recipient, data):
+        payload = struct.pack("!H", len(recipient))
+        payload += recipient.encode('utf-8')
+        payload += struct.pack("!B", Command.MSG_ENC_PUBKEY)
         payload += data
         packet = self.packetize(Command.CMD_MSGTO, payload)
         self.queue.put(packet)
@@ -64,21 +82,13 @@ class Command():
         packet = self.packetize(Command.CMD_IDENT, name.encode('utf-8'))
         self.queue.put(packet)
 
-    def auth(self):
-        # TODO
-        pass
-
-    def getpk(self, name):
-        packet = self.packetize(Command.CMD_GETPK, name.encode('utf-8'))
-        self.queue.put(packet)
-
     def who(self):
         packet = self.packetize(Command.CMD_WHO)
         self.queue.put(packet)
 
 
 class Response():
-    SVR_NOTICE, SVR_MSG, SVR_IDENT, SVR_AUTH_VALID, SVR_PK, SVR_WHO, DISCONNECTED = range(6, 13)
+    SVR_NOTICE, SVR_MSG, SVR_WHO, DISCONNECTED = range(4, 8)
 
     def __init__(self, rtype):
         self.type = rtype
@@ -294,32 +304,22 @@ class DeadChatClient():
                 name = rx[8:8+namelen]
                 msgtype = struct.unpack("!B", rx[8+namelen])[0]
 
-                if msgtype == Command.MSG_REQKEY:
-                    self.svr_msg_requestkey(name)
-                elif msgtype == Command.MSG_SENDKEY:
+                if msgtype == Command.MSG_REQ_SHAREKEY:
+                    self.svr_msg_request_sharekey(name)
+                elif msgtype == Command.MSG_SEND_SHAREKEY:
                     data = rx[8+namelen+1:]
-                    self.svr_msg_sendkey(name, data)
-                elif msgtype == Command.MSG_PUBKEYENC:
+                    self.svr_msg_send_sharekey(name, data)
+                elif msgtype == Command.MSG_ENC_SHAREKEY:
                     data = rx[8+namelen+1:]
-                    self.svr_msg_pubkeyenc(name, data)
-                elif msgtype == Command.MSG_SHAREKEYENC:
+                    self.svr_msg_encrypted_sharekey(name, data)
+                elif msgtype == Command.MSG_REQ_PUBKEY:
+                    self.svr_msg_request_pubkey(name)
+                elif msgtype == Command.MSG_SEND_PUBKEY:
                     data = rx[8+namelen+1:]
-                    self.svr_msg_sharekeyenc(name, data)
-
-            # SVR_IDENT
-            elif rxtype == Response.SVR_IDENT:
-                # TODO
-                pass
-
-            # SVR_AUTH_VALID
-            elif rxtype == Response.SVR_AUTH_VALID:
-                # TODO
-                self.chatlog_print("Identity confirmed")
-
-            # SVR_PK
-            elif rxtype == Response.SVR_PK:
-                # TODO
-                pass
+                    self.svr_msg_send_pubkey(name, data)
+                elif msgtype == Command.MSG_ENC_PUBKEY:
+                    data = rx[8+namelen+1:]
+                    self.svr_msg_encrypted_pubkey(name, data)
 
             # SVR_WHO
             elif rxtype == Response.SVR_WHO:
@@ -382,6 +382,21 @@ class DeadChatClient():
             else:
                 self.chatlog_print("Missing name")
 
+        # /msg <name> <msg>
+        elif string.find(text, "/msg") == 0:
+            msgstr = text.split(" ", 2)
+            if len(msgstr) > 1:
+                if self.connected:
+                    if len(msgstr) >= 3:
+                        msg = msgstr[2]
+                    else:
+                        msg = ""
+                    self.user_msg(msgstr[1], msg)
+                else:
+                    self.chatlog_print("Not connected")
+            else:
+                self.chatlog_print("Missing name")
+
         # not a command
         else:
             if self.connected:
@@ -391,7 +406,7 @@ class DeadChatClient():
                     # TODO: fix this nonce so it has a unique prefix
                     nonce = nacl.utils.random(24)
                     enc = self.secretbox.encrypt(text.encode('utf-8'), nonce)
-                    self.send_cmd.msgall_enc(enc)
+                    self.send_cmd.msg_enc_sharekey(enc)
             else:
                 self.chatlog_print("Not connected")
 
@@ -428,8 +443,10 @@ class DeadChatClient():
         self.chatlog_print("Created identity " + self.name)
         if not self.config.has_section("id"):
             self.config.add_section("id")
-        self.config.set("id", "id_private_key", base64.b64encode(self.id_private_key.encode()))
-        self.config.set("id", "id_public_key", base64.b64encode(self.id_public_key.encode()))
+        self.config.set("id", "id_private_key", \
+                        base64.b64encode(self.id_private_key.encode()))
+        self.config.set("id", "id_public_key", \
+                        base64.b64encode(self.id_public_key.encode()))
         self.config.set("id", "name", self.name)
         with open("deadchat.cfg", "wb") as configfile:
             self.config.write(configfile)
@@ -474,35 +491,37 @@ class DeadChatClient():
 
 
     def user_requestkey(self):
-        self.send_cmd.msgall_reqkey()
+        self.send_cmd.msg_req_sharekey()
 
 
     def user_sendkey(self, name):
         # TODO: fix this so it encrypts key with recipient's public key first
         key = self.shared_key
-        self.send_cmd.msgto_sendkey(name, key)
+        self.send_cmd.msg_send_sharekey(name, key)
 
 
-    def svr_msg_requestkey(self, sender):
+    def user_msg(self, name, msg):
+        # TODO: fix this so it encrypts with recipient's public key first
+        self.send_cmd.msg_enc_pubkey(name, msg.encode('utf-8'))
+
+
+    def svr_msg_request_sharekey(self, sender):
         self.chatlog_print(sender + " requests the key")
 
 
-    def svr_msg_sendkey(self, sender, data):
+    def svr_msg_send_sharekey(self, sender, data):
         # TODO: decrypt shared key using private key
         self.shared_key = data
         self.secretbox = nacl.secret.SecretBox(self.shared_key)
         if not self.config.has_section("room"):
             self.config.add_section("room")
         self.config.set("room", "room_key", base64.b64encode(self.shared_key))
+        with open("deadchat.cfg", "wb") as configfile:
+            self.config.write(configfile)
         self.chatlog_print(sender + " has sent you the key")
 
 
-    def svr_msg_pubkeyenc(self, sender, data):
-        # TODO
-        pass
-
-
-    def svr_msg_sharekeyenc(self, sender, data):
+    def svr_msg_encrypted_sharekey(self, sender, data):
         nonce = data[0:24]
         enc = data[24:]
         if self.secretbox:
@@ -513,6 +532,23 @@ class DeadChatClient():
             except nacl.exceptions.CryptoError:
                 pass
         self.chatlog_print("<" + sender + "> ( encrypted )")
+
+
+    def svr_msg_request_pubkey(self, sender):
+        self.send_cmd.msg_send_pubkey(sender, self.id_public_key)
+
+
+    def svr_msg_send_pubkey(self, sender, data):
+        if not self.config.has_section("keys"):
+            self.config.add_section("keys")
+        self.config.set("keys", sender, base64.b64encode(data))
+        with open("deadchat.cfg", "wb") as configfile:
+            self.config.write(configfile)
+
+
+    def svr_msg_encrypted_pubkey(self, sender, data):
+        # TODO: decrypt message using private key
+        self.chatlog_print("[" + sender + "] " + data)
 
         
 def main():

@@ -52,16 +52,11 @@ const (
 	CMD_MSGALL = iota	// [data]
 	CMD_MSGTO			// [target name length (2)] [target name] [data] 
 	CMD_IDENT			// [name]
-	CMD_AUTH
-	CMD_GETPK
 	CMD_WHO
 
 	// Responses from server
 	SVR_NOTICE			// [plaintext message]
 	SVR_MSG				// [sender name length (2)] [sender name] [data]
-	SVR_IDENT			
-	SVR_AUTH_VALID
-	SVR_PK
 	SVR_WHO
 )
 
@@ -146,10 +141,6 @@ func parse(info *ClientInfo, packet []byte) {
 	case cmd == CMD_IDENT:
 		cmd_ident(info, packet[1:])
 		fmt.Printf("user %s identified\n", info.name)
-	case cmd == CMD_AUTH:
-		cmd_auth(info, packet[1:])
-	case cmd == CMD_GETPK:
-		cmd_getpk(info, packet[1:])
 	case cmd == CMD_WHO:
 		cmd_who(info)
 	default:
@@ -181,13 +172,9 @@ func svr_notice_all(msg string) (int, error) {
 	return clients.Write(packetize(byte(SVR_NOTICE), []byte(msg)))
 }
 
-func svr_auth_valid(c net.Conn) (int, error) {
-	return c.Write(packetize(byte(SVR_AUTH_VALID), []byte{}))
-}
-
 func cmd_msgall(info *ClientInfo, packet []byte) (int, error) {
 	if info.name == "" {
-		svr_notice(info.conn, "you are not authenticated")
+		svr_notice(info.conn, "please identify yourself")
 		return -1, nil
 	}
 
@@ -200,7 +187,7 @@ func cmd_msgall(info *ClientInfo, packet []byte) (int, error) {
 
 func cmd_msgto(info *ClientInfo, packet []byte) (int, error) {
 	if info.name == "" {
-		svr_notice(info.conn, "you are not authenticated")
+		svr_notice(info.conn, "please identify yourself")
 		return -1, nil
 	}
 
@@ -230,29 +217,17 @@ func cmd_ident(info *ClientInfo, packet []byte) {
 	}
 
 	if !clients.Add(name, info.conn) {
-		svr_notice(info.conn, name + " is already connected")
+		svr_notice(info.conn, name + " is already in use")
 		return
 	}
 
-	svr_auth_valid(info.conn)
 	svr_notice_all(name + " connected")
 	info.name = name
 }
 
-func cmd_auth(info *ClientInfo, packet []byte) {
-
-}
-
-func cmd_getpk(info *ClientInfo, packet []byte) {
-	if info.name == "" {
-		svr_notice(info.conn, "you are not authenticated")
-//		return -1, nil
-	}
-}
-
 func cmd_who(info *ClientInfo) {
 	if info.name == "" {
-		svr_notice(info.conn, "you are not authenticated")
+		svr_notice(info.conn, "please identify yourself")
 //		return -1, nil
 	}
 }
