@@ -49,8 +49,8 @@ const MAX_NAME_LENGTH int = 65535
 //
 const (
 	// Commands from client
-	CMD_MSGALL = iota	// [encrypted data]
-	CMD_MSGTO			// [target name length (2)] [target name] [data]
+	CMD_MSGALL = iota	// [data]
+	CMD_MSGTO			// [target name length (2)] [target name] [data] 
 	CMD_IDENT			// [name]
 	CMD_AUTH
 	CMD_GETPK
@@ -140,14 +140,18 @@ func parse(info *ClientInfo, packet []byte) {
 	cmd := packet[0]
 	switch {
 	case cmd == CMD_MSGALL:
-		if info.name == "" {
-			svr_notice(info.conn, "you are not authenticated")
-		} else {
-			cmd_msgall(info.name, packet[1:])
-		}
+		cmd_msgall(info, packet[1:])
+	case cmd == CMD_MSGTO:
+		cmd_msgto(info, packet[1:])
 	case cmd == CMD_IDENT:
 		cmd_ident(info, packet[1:])
 		fmt.Printf("user %s identified\n", info.name)
+	case cmd == CMD_AUTH:
+		cmd_auth(info, packet[1:])
+	case cmd == CMD_GETPK:
+		cmd_getpk(info, packet[1:])
+	case cmd == CMD_WHO:
+		cmd_who(info)
 	default:
 	}
 }
@@ -181,16 +185,44 @@ func svr_auth_valid(c net.Conn) (int, error) {
 	return c.Write(packetize(byte(SVR_AUTH_VALID), []byte{}))
 }
 
-func cmd_msgall(sender string, data []byte) (int, error) {
+func cmd_msgall(info *ClientInfo, packet []byte) (int, error) {
+	if info.name == "" {
+		svr_notice(info.conn, "you are not authenticated")
+		return -1, nil
+	}
+
 	var buf bytes.Buffer
-	binary.Write(&buf, binary.BigEndian, uint16(len(sender)))
-	buf.Write([]byte(sender))
-	buf.Write(data)
+	binary.Write(&buf, binary.BigEndian, uint16(len(info.name)))
+	buf.Write([]byte(info.name))
+	buf.Write(packet)
 	return clients.Write(packetize(SVR_MSG, buf.Bytes()))
 }
 
-func cmd_ident(info *ClientInfo, data []byte) {
-	name := string(data)
+func cmd_msgto(info *ClientInfo, packet []byte) (int, error) {
+	if info.name == "" {
+		svr_notice(info.conn, "you are not authenticated")
+		return -1, nil
+	}
+
+	targetlen := int(binary.BigEndian.Uint16(packet[0:2]))
+	target := string(packet[2:2+targetlen])
+	data := packet[2+targetlen:]
+
+	c, present := clients[target]
+	if !present {
+		svr_notice(info.conn, fmt.Sprintf("unknown recipient %s", target))
+		return -1, nil
+	}
+
+	var buf bytes.Buffer
+	binary.Write(&buf, binary.BigEndian, uint16(len(info.name)))
+	buf.Write([]byte(info.name))
+	buf.Write(data)
+	return c.Write(packetize(byte(SVR_MSG), buf.Bytes()))
+}
+
+func cmd_ident(info *ClientInfo, packet []byte) {
+	name := string(packet)
 
 	if len(name) > MAX_NAME_LENGTH {
 		svr_notice(info.conn, "invalid name")
@@ -205,6 +237,24 @@ func cmd_ident(info *ClientInfo, data []byte) {
 	svr_auth_valid(info.conn)
 	svr_notice_all(name + " connected")
 	info.name = name
+}
+
+func cmd_auth(info *ClientInfo, packet []byte) {
+
+}
+
+func cmd_getpk(info *ClientInfo, packet []byte) {
+	if info.name == "" {
+		svr_notice(info.conn, "you are not authenticated")
+//		return -1, nil
+	}
+}
+
+func cmd_who(info *ClientInfo) {
+	if info.name == "" {
+		svr_notice(info.conn, "you are not authenticated")
+//		return -1, nil
+	}
 }
 
 func main() {

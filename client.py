@@ -26,16 +26,38 @@ class Command():
     def __init__(self, txq):
         self.queue = txq
 
-    def packetize(self, command, payload):
+    def packetize(self, command, payload=""):
         pktlen = len(payload) + 1
         return struct.pack("!cIB", '\xde', pktlen, command) + payload
-    
+
+    # [data]
     def msgall(self, data):
         packet = self.packetize(Command.CMD_MSGALL, data)
         self.queue.put(packet)
 
+    # [target name length (2)] [target name] [data]
+    def msgto(self, recipient, data):
+        payload = struct.pack("!H", len(recipient))
+        payload += recipient.encode('utf-8')
+        payload += data
+        packet = self.packetize(Command.CMD_MSGTO, payload)
+        self.queue.put(packet)
+
+    # [name]
     def ident(self, name):
         packet = self.packetize(Command.CMD_IDENT, name.encode('utf-8'))
+        self.queue.put(packet)
+
+    def auth(self):
+        pass
+
+    # [name]
+    def getpk(self, name):
+        packet = self.packetize(Command.CMD_GETPK, name.encode('utf-8'))
+        self.queue.put(packet)
+
+    def who(self):
+        packet = self.packetize(Command.CMD_WHO)
         self.queue.put(packet)
 
 
@@ -237,22 +259,41 @@ class DeadChatClient():
 
     def parse_rx(self, rx):
         if isinstance(rx, Response):
+            # DISCONNECTED
             if rx.type == Response.DISCONNECTED:
                 self.user_disconnect()
         else:
-            svr_type = struct.unpack("B", rx[5])[0]
-            if svr_type == Response.SVR_NOTICE:
+            rxtype = struct.unpack("B", rx[5])[0]
+
+            # SVR_NOTICE
+            if rxtype == Response.SVR_NOTICE:
                 msg = rx[6:]
                 self.chatlog_print(msg)
-            elif svr_type == Response.SVR_MSG:
+
+            # SVR_MSG
+            elif rxtype == Response.SVR_MSG:
                 if self.secretbox:
                     namelen = struct.unpack("!H", rx[6:8])[0]
                     name = rx[8:8+namelen]
                     msg = self.secretbox.decrypt(rx[8+namelen+24:], rx[8+namelen:8+namelen+24])
                     self.chatlog_print("<" + name + "> " + msg)
-            elif svr_type == Response.SVR_AUTH_VALID:
+
+            # SVR_IDENT
+            elif rxtype == Response.SVR_IDENT:
+                pass
+
+            # SVR_AUTH_VALID
+            elif rxtype == Response.SVR_AUTH_VALID:
                 self.chatlog_print("Identity confirmed")
-                
+
+            # SVR_PK
+            elif rxtype == Response.SVR_PK:
+                pass
+
+            # SVR_WHO
+            elif rxtype == Response.SVR_WHO:
+                pass
+
 
     def parse_user_input(self, text):
         # /quit
@@ -276,6 +317,7 @@ class DeadChatClient():
             else:
                 if self.name:
                     self.user_connect("localhost", 4000)
+                    self.send_cmd.ident(self.name)
                 else:
                     self.chatlog_print("Missing name, set using /createid")
 
@@ -290,7 +332,25 @@ class DeadChatClient():
         elif string.find(text, "/genkey") == 0:
             self.user_genkey()
 
-        # msgall
+        # /requestkey
+        elif string.find(text, "/requestkey") == 0:
+            if self.connected:
+                self.user_requestkey()
+            else:
+                self.chatlog_print("Not connected")
+
+        # /sendkey <name>
+        elif string.find(text, "/sendkey") == 0:
+            sendkeystr = text.split(" ")
+            if len(sendkeystr) > 1:
+                if self.connected:
+                    self.user_sendkey(sendkeystr[1])
+                else:
+                    self.chatlog_print("Not connected")
+            else:
+                self.chatlog_print("Missing name")
+
+        # not a command
         else:
             if self.connected:
                 if not self.secretbox:
@@ -356,8 +416,6 @@ class DeadChatClient():
             self.connected = True
             self.chatlog_print("Connected to " + host)
 
-            self.send_cmd.ident(self.name)
-
         except Exception as e:
             self.chatlog_print("Unable to connect to " + host + \
                                " on port " + str(port))
@@ -380,6 +438,14 @@ class DeadChatClient():
         with open("deadchat.cfg", "wb") as configfile:
             self.config.write(configfile)
         self.chatlog_print("Room key generated")
+
+
+    def user_requestkey(self):
+        pass
+
+
+    def user_sendkey(self, name):
+        pass
 
         
 def main():
