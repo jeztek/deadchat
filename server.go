@@ -37,20 +37,29 @@ func (cm clientMap) Add(name string, c net.Conn) bool {
 }
 
 const HEADER_BYTE byte = '\xde'
+const MAX_NAME_LENGTH int = 65535
 
+// All packets have the following format:
+// [header (1)] [packet length (4)] [type (1)] [payload]
+//
+// The packet length field specifies the number of bytes in the packet
+// excluding the header
+//
+// The payload varies for each command or response
+//
 const (
 	// Commands from client
-	CMD_MSGALL = iota
-	CMD_MSGTO
-	CMD_IDENT
+	CMD_MSGALL = iota	// [encrypted data]
+	CMD_MSGTO			// [target name length (2)] [target name] [data]
+	CMD_IDENT			// [name]
 	CMD_AUTH
 	CMD_GETPK
 	CMD_WHO
 
 	// Responses from server
-	SVR_NOTICE
-	SVR_MSG
-	SVR_IDENT
+	SVR_NOTICE			// [plaintext message]
+	SVR_MSG				// [sender name length (2)] [sender name] [data]
+	SVR_IDENT			
 	SVR_AUTH_VALID
 	SVR_PK
 	SVR_WHO
@@ -68,7 +77,7 @@ func init() {
 }
 
 // Packet:
-// [header] [packet len except header (4)] [type (1)] [packet data]
+// [header] [packet length excluding header (4)] [type (1)] [packet data]
 func client(c net.Conn) {
 	defer c.Close()
 
@@ -78,11 +87,13 @@ func client(c net.Conn) {
 	br := bufio.NewReader(c)
 	
 	for {
+		// Drop bytes preceding HEADER_BYTE
 		_, err := br.ReadBytes(HEADER_BYTE)
 		if err != nil {
 			break
 		}
 
+		// Get packet length field
 		packet := make([]byte, 4)
 		read_bytes := 0
 		for read_bytes < 4 {
@@ -94,8 +105,9 @@ func client(c net.Conn) {
 			copy(packet[read_bytes:], tmp[:nread])
 			read_bytes += nread
 		}
-		
 		pktlen := int(binary.BigEndian.Uint32(packet))
+
+		// Get rest of packet
 		packet = make([]byte, pktlen)
 		read_bytes = 0
 		for read_bytes < pktlen {
@@ -108,33 +120,39 @@ func client(c net.Conn) {
 			read_bytes += nread
 		}
 
+		// Parse
 		parse(&info, packet)
 	}
+
+	// On disconnet
 	svr_notice_all(info.name + " disconnected")
+	delete(clients, info.name)
 }
 
+// Parse incoming packet
 func parse(info *ClientInfo, packet []byte) {
-	fmt.Printf("rx: ")
-	for i := 0; i < len(packet); i++ {
-		fmt.Printf("%02x ", packet[i])
-	}
-	fmt.Printf("\n")
+	// fmt.Printf("rx: ")
+	// for i := 0; i < len(packet); i++ {
+	// 	fmt.Printf("%02x ", packet[i])
+	// }
+	// fmt.Printf("\n")
 
 	cmd := packet[0]
 	switch {
 	case cmd == CMD_MSGALL:
 		if info.name == "" {
-			svr_notice(info.conn, "name not set")
+			svr_notice(info.conn, "you are not authenticated")
 		} else {
 			cmd_msgall(info.name, packet[1:])
 		}
 	case cmd == CMD_IDENT:
 		cmd_ident(info, packet[1:])
-		fmt.Printf("name: %s\n", info.name)
+		fmt.Printf("user %s identified\n", info.name)
 	default:
 	}
 }
 
+// Helper function to set common packet fields
 func packetize(packet_type byte, payload []byte) []byte {
 	var buf bytes.Buffer
 	buf.Write([]byte{ HEADER_BYTE })
@@ -144,7 +162,7 @@ func packetize(packet_type byte, payload []byte) []byte {
 
 	var pkt []byte = buf.Bytes()
 	fmt.Printf("tx: ")
-	for i := 0; i < len(pkt); i++ {
+	for i := 5; i < len(pkt); i++ {
 		fmt.Printf("%02x ", pkt[i])
 	}
 	fmt.Printf("\n")
@@ -174,7 +192,7 @@ func cmd_msgall(sender string, data []byte) (int, error) {
 func cmd_ident(info *ClientInfo, data []byte) {
 	name := string(data)
 
-	if len(name) > 65535 {
+	if len(name) > MAX_NAME_LENGTH {
 		svr_notice(info.conn, "invalid name")
 		return
 	}
