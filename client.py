@@ -2,6 +2,8 @@
 
 # TODO:
 # SSL connection to server
+# fix nonces
+# disallow unicode names
 
 import sys
 import base64
@@ -55,10 +57,11 @@ class Command():
         packet = self.packetize(Command.CMD_MSGTO, payload)
         self.queue.put(packet)
 
-    def msg_req_pubkey(self, recipient):
+    def msg_req_pubkey(self, recipient, mykey):
         payload = struct.pack("!H", len(recipient))
         payload += recipient.encode('utf-8')
         payload += struct.pack("!B", Command.MSG_REQ_PUBKEY)
+        payload += mykey
         packet = self.packetize(Command.CMD_MSGTO, payload)
         self.queue.put(packet)
 
@@ -102,14 +105,18 @@ class TransmitThread(threading.Thread):
         self.enable = threading.Event()
         self.enable.set()
 
+    def send_packet(self, packet):
+        sent_bytes = 0
+        pktlen = len(packet)
+        while sent_bytes < pktlen:
+            sent_bytes += self.sock.send(packet[sent_bytes:])
+        return sent_bytes
+
     def run(self):
         while self.enable.is_set():
             try:
                 packet = self.queue.get(True, 0.125)
-                sent_bytes = 0
-                pktlen = len(packet)
-                while sent_bytes < pktlen:
-                    sent_bytes += self.sock.send(packet[sent_bytes:])
+                self.send_packet(packet)
             except Queue.Empty:
                 continue
 
@@ -126,45 +133,55 @@ class ReceiveThread(threading.Thread):
         self.enable = threading.Event()
         self.enable.set()
 
+    def get_packet(self, block=False):
+        r = None
+        if block:
+            r, w, e = select.select([self.sock], [], [])
+        else:
+            r, w, e = select.select([self.sock], [], [], 0.125
+        for sock in r:
+            if sock == self.sock:
+                try:
+                    read_bytes = 0
+                    packet = ""
+                    have_pktlen = False
+                    # Receive data until we have length field from packet
+                    while not have_pktlen:
+                        tmp = sock.recv(4096)
+                        if not tmp:
+                            self.queue.put(Response(Response.DISCONNECTED))
+                            self.enable.clear()
+                            return
+                        else:
+                            packet += tmp
+                            read_bytes += len(tmp)
+                            header_index = tmp.find('\xde')
+                            if header_index + 4 <= read_bytes:
+                                have_pktlen = True
+
+                    # Drop bytes before header
+                    packet = packet[header_index:]
+                    pktlen = struct.unpack("!I", packet[1:5])[0]
+                    read_bytes = len(packet) - 1
+                    while read_bytes < pktlen:
+                        tmp = sock.recv(4096)
+                        if not tmp:
+                            self.queue.put(Response(Response.DISCONNECTED))
+                            self.enable.clear()
+                            return
+                        else:
+                            packet.append(tmp)
+                            read_bytes += len(tmp)
+                    return packet
+                except socket.error:
+                    return None
+        return None
+
     def run(self):
         while self.enable.is_set():
-            r, w, e = select.select([self.sock], [], [], 0.125)
-            for sock in r:
-                if sock == self.sock:
-                    try:
-                        read_bytes = 0
-                        packet = ""
-                        have_pktlen = False
-                        # Receive data until we have length field from packet
-                        while not have_pktlen:
-                            tmp = sock.recv(4096)
-                            if not tmp:
-                                self.queue.put(Response(Response.DISCONNECTED))
-                                self.enable.clear()
-                                return
-                            else:
-                                packet += tmp
-                                read_bytes += len(tmp)
-                                header_index = tmp.find('\xde')
-                                if header_index + 4 <= read_bytes:
-                                    have_pktlen = True
-
-                        # Drop bytes before header
-                        packet = packet[header_index:]
-                        pktlen = struct.unpack("!I", packet[1:5])[0]
-                        read_bytes = len(packet) - 1
-                        while read_bytes < pktlen:
-                            tmp = sock.recv(4096)
-                            if not tmp:
-                                self.queue.put(Response(Response.DISCONNECTED))
-                                self.enable.clear()
-                                return
-                            else:
-                                packet.append(tmp)
-                                read_bytes += len(tmp)
-                        self.queue.put(packet)
-                    except socket.error:
-                        continue
+            packet = self.get_packet()
+            if packet:
+                self.queue.put(packet)
 
     def stop(self):
         self.enable.clear()
@@ -182,6 +199,7 @@ class DeadChatClient():
         
         self.shared_key = None
         self.secretbox = None
+        self.boxes = {}
         
         self.sock = None
         self.connected = False
@@ -313,7 +331,8 @@ class DeadChatClient():
                     data = rx[8+namelen+1:]
                     self.svr_msg_encrypted_sharekey(name, data)
                 elif msgtype == Command.MSG_REQ_PUBKEY:
-                    self.svr_msg_request_pubkey(name)
+                    data = rx[8+namelen+1:]
+                    self.svr_msg_request_pubkey(name, data)
                 elif msgtype == Command.MSG_SEND_PUBKEY:
                     data = rx[8+namelen+1:]
                     self.svr_msg_send_pubkey(name, data)
@@ -360,23 +379,34 @@ class DeadChatClient():
             else:
                 self.chatlog_print("Not connected")
 
-        # /genkey
-        elif string.find(text, "/genkey") == 0:
-            self.user_genkey()
+        # /genroomkey
+        elif string.find(text, "/genroomkey") == 0:
+            self.user_genroomkey()
 
-        # /requestkey
-        elif string.find(text, "/requestkey") == 0:
+        # /reqroomkey
+        elif string.find(text, "/reqroomkey") == 0:
             if self.connected:
-                self.user_requestkey()
+                self.user_reqroomkey()
             else:
                 self.chatlog_print("Not connected")
 
-        # /sendkey <name>
-        elif string.find(text, "/sendkey") == 0:
-            sendkeystr = text.split(" ")
-            if len(sendkeystr) > 1:
+        # /sendroomkey <name>
+        elif string.find(text, "/sendroomkey") == 0:
+            sendroomkeystr = text.split(" ")
+            if len(sendroomkeystr) > 1:
                 if self.connected:
-                    self.user_sendkey(sendkeystr[1])
+                    self.user_sendroomkey(sendroomkeystr[1])
+                else:
+                    self.chatlog_print("Not connected")
+            else:
+                self.chatlog_print("Missing name")
+
+        # /reqidexch <name>
+        elif string.find(text, "/reqidexch") == 0:
+            reqidexchstr = text.split(" ")
+            if len(reqidexchstr) > 1:
+                if self.connected:
+                    self.user_reqidexch(reqidexchstr[1])
                 else:
                     self.chatlog_print("Not connected")
             else:
@@ -418,6 +448,7 @@ class DeadChatClient():
                 self.id_private_key = nacl.public.PrivateKey(base64.b64decode(self.config.get("id", "id_private_key")))
                 self.id_public_key = nacl.public.PublicKey(base64.b64decode(self.config.get("id", "id_public_key")))
                 self.name = self.config.get("id", "name")
+                self.ui_status.set_text("deadchat - " + self.name)
                 self.chatlog_print("Name set to " + self.name)
             except:
                 pass
@@ -440,6 +471,7 @@ class DeadChatClient():
         self.id_private_key = key
         self.id_public_key = key.public_key
 
+        self.ui_status.set_text("deadchat - " + self.name)
         self.chatlog_print("Created identity " + self.name)
         if not self.config.has_section("id"):
             self.config.add_section("id")
@@ -479,7 +511,7 @@ class DeadChatClient():
         self.chatlog_print("Disconnected from server")
 
 
-    def user_genkey(self):
+    def user_genroomkey(self):
         self.shared_key = nacl.utils.random(32)
         self.secretbox = nacl.secret.SecretBox(self.shared_key)
         if not self.config.has_section("room"):
@@ -487,38 +519,74 @@ class DeadChatClient():
         self.config.set("room", "room_key", base64.b64encode(self.shared_key))
         with open("deadchat.cfg", "wb") as configfile:
             self.config.write(configfile)
-        self.chatlog_print("Key generated")
+        self.chatlog_print("Room key generated")
 
 
-    def user_requestkey(self):
+    def user_reqroomkey(self):
         self.send_cmd.msg_req_sharekey()
 
 
-    def user_sendkey(self, name):
-        # TODO: fix this so it encrypts key with recipient's public key first
-        key = self.shared_key
-        self.send_cmd.msg_send_sharekey(name, key)
+    def user_sendroomkey(self, name):
+        if self.init_pubkey(name):
+            nonce = nacl.utils.random(nacl.public.Box.NONCE_SIZE)
+            enc = self.boxes[name].encrypt(self.shared_key, nonce)
+            self.send_cmd.msg_send_sharekey(name, enc)
+            self.chatlog_print("Sent room key to " + name)
+        else:
+            self.chatlog_print("No key for " + name + ", run /reqidexch first")
+
+
+    def user_reqidexch(self, name):
+        key = self.id_public_key.encode()
+        self.send_cmd.msg_req_pubkey(name, key)
+        self.chatlog_print("Requested room key from " + name)
 
 
     def user_msg(self, name, msg):
-        # TODO: fix this so it encrypts with recipient's public key first
-        self.send_cmd.msg_enc_pubkey(name, msg.encode('utf-8'))
+        if self.init_pubkey(name):
+            nonce = nacl.utils.random(nacl.public.Box.NONCE_SIZE)
+            enc = self.boxes[name].encrypt(msg.encode('utf-8'), nonce)
+            self.send_cmd.msg_enc_pubkey(name, enc)
+            self.chatlog_print("[%s => %s] %s" % (self.name, name, msg))
+        else:
+            self.chatlog_print("No key for " + name + ", run /reqidexch first")
+
+
+    def init_pubkey(self, name):
+        if self.boxes.has_key(name):
+            return True
+
+        self.config.read("deadchat.cfg")
+        if self.config.has_section("keys"):
+            try:
+                b64key = self.config.get("keys", name)
+                key = nacl.public.PublicKey(base64.b64decode(b64key))
+                self.boxes[name] = nacl.public.Box(self.id_private_key, key)
+                return True
+            except:
+                pass
+        return False
 
 
     def svr_msg_request_sharekey(self, sender):
-        self.chatlog_print(sender + " requests the key")
+        self.chatlog_print(sender + " requests the room key")
 
 
     def svr_msg_send_sharekey(self, sender, data):
-        # TODO: decrypt shared key using private key
-        self.shared_key = data
-        self.secretbox = nacl.secret.SecretBox(self.shared_key)
-        if not self.config.has_section("room"):
-            self.config.add_section("room")
-        self.config.set("room", "room_key", base64.b64encode(self.shared_key))
-        with open("deadchat.cfg", "wb") as configfile:
-            self.config.write(configfile)
-        self.chatlog_print(sender + " has sent you the key")
+        if self.init_pubkey(sender):
+            nonce = data[0:nacl.public.Box.NONCE_SIZE]
+            enc = data[nacl.public.Box.NONCE_SIZE:]
+            self.shared_key = self.boxes[sender].decrypt(enc, nonce)
+            self.secretbox = nacl.secret.SecretBox(self.shared_key)
+            if not self.config.has_section("room"):
+                self.config.add_section("room")
+            self.config.set("room", "room_key", base64.b64encode(self.shared_key))
+            with open("deadchat.cfg", "wb") as configfile:
+                self.config.write(configfile)
+            self.chatlog_print(sender + " has sent you the room key")
+        else:
+            self.chatlog_print("Received room key from " + sender + \
+                               " but unable to decrypt, run /reqidexch")
 
 
     def svr_msg_encrypted_sharekey(self, sender, data):
@@ -534,21 +602,41 @@ class DeadChatClient():
         self.chatlog_print("<" + sender + "> ( encrypted )")
 
 
-    def svr_msg_request_pubkey(self, sender):
-        self.send_cmd.msg_send_pubkey(sender, self.id_public_key)
-
-
-    def svr_msg_send_pubkey(self, sender, data):
+    # Received request for my public key
+    def svr_msg_request_pubkey(self, sender, data):
+        # store key from sender
         if not self.config.has_section("keys"):
             self.config.add_section("keys")
         self.config.set("keys", sender, base64.b64encode(data))
         with open("deadchat.cfg", "wb") as configfile:
             self.config.write(configfile)
 
+        # TODO: handle if public_key not set
+        key = self.id_public_key.encode()
+        self.send_cmd.msg_send_pubkey(sender, key)
+        self.chatlog_print("Received id key request from " + sender)
+
+
+    # Received requested public key from sender
+    # TODO: sanitize data
+    def svr_msg_send_pubkey(self, sender, data):
+        # save key to config file
+        if not self.config.has_section("keys"):
+            self.config.add_section("keys")
+        self.config.set("keys", sender, base64.b64encode(data))
+        with open("deadchat.cfg", "wb") as configfile:
+            self.config.write(configfile)
+        self.chatlog_print("id key exchange with " + sender + " complete")
+
 
     def svr_msg_encrypted_pubkey(self, sender, data):
-        # TODO: decrypt message using private key
-        self.chatlog_print("[" + sender + "] " + data)
+        if self.init_pubkey(sender):
+            nonce = data[0:nacl.public.Box.NONCE_SIZE]
+            enc = data[nacl.public.Box.NONCE_SIZE:]
+            msg = self.boxes[sender].decrypt(enc, nonce)
+            self.chatlog_print("[%s => %s] %s" % (sender, self.name, msg))
+        else:
+            self.chatlog_print("[%s => %s] ( unable to decrypt, run /reqidexch )" % (sender, self.name))
 
         
 def main():

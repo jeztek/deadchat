@@ -1,3 +1,5 @@
+// TODO: disconnect user if name not set
+
 package main
 
 import (
