@@ -138,7 +138,7 @@ class ReceiveThread(threading.Thread):
         if block:
             r, w, e = select.select([self.sock], [], [])
         else:
-            r, w, e = select.select([self.sock], [], [], 0.125
+            r, w, e = select.select([self.sock], [], [], 0.125)
         for sock in r:
             if sock == self.sock:
                 try:
@@ -347,8 +347,26 @@ class DeadChatClient():
 
 
     def parse_user_input(self, text):
+        if string.find(text, "/help") == 0:
+            helpstr = \
+"""
+/quit                   Exit program
+/connect                Connect to server
+/disconnect             Disconnect from server
+
+/createid <name>        Create identity and associated keys
+/reqidexch <name>       Request id key exchange
+
+/genroomkey             Generate a secret key for the room
+/reqroomkey             Request the secret key from the room
+/sendroomkey <name>     Send secret key for the room
+
+/msg <name> <msg>       Send private message
+"""
+            self.chatlog_print(helpstr)
+
         # /quit
-        if string.find(text, "/quit") == 0:
+        elif string.find(text, "/quit") == 0:
             if self.connected:
                 self.user_disconnect()
             self.enable = False
