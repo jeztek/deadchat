@@ -391,12 +391,12 @@ class DeadChatClient():
             helpstr = \
 """
 /quit                   Exit program
-/connect                Connect to server
+/connect <host> <port>  Connect to server
 /disconnect             Disconnect from server
 /who                    List users in room
 
 /createid <name>        Create identity and associated keys
-/reqidexch <name>       Request id key exchange
+/idexch <name>          Request id key exchange
 
 /genroomkey             Generate a secret key for the room
 /reqroomkey             Request the secret key from the room
@@ -424,12 +424,28 @@ class DeadChatClient():
         elif string.find(text, "/connect") == 0:
             if self.connected:
                 self.chatlog_print("Already connected")
+                return
+
+            if not self.name:
+                self.chatlog_print("Missing name, set using /createid")
+                return
+            
+            host = None
+            port = None
+            connstr = text.split(" ")
+            if len(connstr) >= 3:
+                try:
+                    host = connstr[1]
+                    port = int(connstr[2])
+                except:
+                    self.chatlog_print("Invalid host or port")
+                    return
             else:
-                if self.name:
-                    self.user_connect("localhost", 4000)
-                    self.send_cmd.ident(self.name)
-                else:
-                    self.chatlog_print("Missing name, set using /createid")
+                self.chatlog_print("Missing host and/or port")
+                return
+            
+            self.user_connect(host, port)
+            self.send_cmd.ident(self.name)
 
         # /disconnect
         elif string.find(text, "/disconnect") == 0:
@@ -467,12 +483,12 @@ class DeadChatClient():
             else:
                 self.chatlog_print("Missing name")
 
-        # /reqidexch <name>
-        elif string.find(text, "/reqidexch") == 0:
-            reqidexchstr = text.split(" ")
-            if len(reqidexchstr) > 1:
+        # /idexch <name>
+        elif string.find(text, "/idexch") == 0:
+            idexchstr = text.split(" ")
+            if len(idexchstr) > 1:
                 if self.connected:
-                    self.user_reqidexch(reqidexchstr[1])
+                    self.user_idexch(idexchstr[1])
                 else:
                     self.chatlog_print("Not connected")
             else:
@@ -595,10 +611,10 @@ class DeadChatClient():
             self.send_cmd.msg_send_sharekey(name, enc)
             self.chatlog_print("Sent room key to " + name)
         else:
-            self.chatlog_print("No key for " + name + ", run /reqidexch first")
+            self.chatlog_print("No key for " + name + ", run /idexch first")
 
 
-    def user_reqidexch(self, name):
+    def user_idexch(self, name):
         key = self.id_public_key.encode()
         self.send_cmd.msg_req_pubkey(name, key)
         self.chatlog_print("Requested room key from " + name)
@@ -611,7 +627,7 @@ class DeadChatClient():
             self.send_cmd.msg_enc_pubkey(name, enc)
             self.chatlog_print("[%s => %s] %s" % (self.name, name, msg))
         else:
-            self.chatlog_print("No key for " + name + ", run /reqidexch first")
+            self.chatlog_print("No key for " + name + ", run /idexch first")
 
 
     def init_pubkey(self, name):
@@ -648,7 +664,7 @@ class DeadChatClient():
             self.chatlog_print(sender + " has sent you the room key")
         else:
             self.chatlog_print("Received room key from " + sender + \
-                               " but unable to decrypt, run /reqidexch")
+                               " but unable to decrypt, run /idexch")
 
 
     def svr_msg_encrypted_sharekey(self, sender, data):
@@ -698,7 +714,7 @@ class DeadChatClient():
             msg = self.boxes[sender].decrypt(enc, nonce)
             self.chatlog_print("[%s => %s] %s" % (sender, self.name, msg))
         else:
-            self.chatlog_print("[%s => %s] ( unable to decrypt, run /reqidexch )" % (sender, self.name))
+            self.chatlog_print("[%s => %s] ( unable to decrypt, run /idexch )" % (sender, self.name))
 
         
 def main():
