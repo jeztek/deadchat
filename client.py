@@ -434,7 +434,10 @@ class DeadChatClient():
             host = None
             port = None
             connstr = text.split(" ")
-            if len(connstr) >= 3:
+            if len(connstr) == 2:
+                host = connstr[1]
+                port = 6150
+            elif len(connstr) >= 3:
                 try:
                     host = connstr[1]
                     port = int(connstr[2])

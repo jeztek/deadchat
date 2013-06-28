@@ -231,10 +231,11 @@ func cmd_who(info *ClientInfo) {
 		svr_notice(info.conn, "please identify yourself")
 		return
 	} else {
-		svr_notice(info.conn, "Who:")
+	        msg := fmt.Sprintf("Who (%v users):\n", len(clients))
 		for key, _ := range clients {
-		    	 svr_notice(info.conn, "  " + key)
+		         msg += fmt.Sprintf("  %v\n", key)
 		}
+		svr_notice(info.conn, msg)
         }
 }
 
@@ -243,7 +244,7 @@ func main() {
 		port int
 		help bool
 	)
-	flag.IntVar(&port, "port", 4000, "Port to listen on")
+	flag.IntVar(&port, "port", 6150, "Port to listen on")
 	flag.BoolVar(&help, "help", false, "Display this")
 	flag.Parse()
 
