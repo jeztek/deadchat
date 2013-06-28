@@ -5,6 +5,8 @@
 # fix nonces
 # disallow unicode names
 
+from collections import deque
+
 import sys
 import base64
 import logging
@@ -215,6 +217,10 @@ class DeadChatClient():
         self.enable = True
         self.display_size = None	# cols, rows tuple
 
+        self.input_history = deque(maxlen=50)
+        self.input_index = -1
+        self.input_stash = ""
+        
         # Generate user interface
         self.chatlog = urwid.SimpleListWalker([])
         self.ui_listbox = urwid.ListBox(self.chatlog)
@@ -279,11 +285,50 @@ class DeadChatClient():
 
 
     def keypress(self, key):
+        input = self.ui_input
+
         if key == "enter":
-            text = self.ui_input.get_edit_text()
+            text = input.get_edit_text()
             if text != "":
+                self.input_history.appendleft(text)
+                self.input_index = -1
+                self.input_stash = ""
                 self.ui_input.set_edit_text("")
                 self.parse_user_input(text)
+        elif key == "up":
+            if len(self.input_history) > 0:
+                if self.input_index < 0:
+                    self.input_stash = input.get_edit_text()
+                self.input_index = min(self.input_index + 1, \
+                                       len(self.input_history) - 1)
+                input.set_edit_text(self.input_history[self.input_index])
+                input.set_edit_pos(len(input.get_edit_text()))
+        elif key == "down":
+            if len(self.input_history) > 0:
+                if self.input_index == -1:
+                    pass
+                elif self.input_index == 0:
+                    self.input_index = -1
+                    input.set_edit_text(self.input_stash)
+                    input.set_edit_pos(len(input.get_edit_text()))
+                else:
+                    self.input_index = max(self.input_index - 1, 0)
+                    input.set_edit_text(self.input_history[self.input_index])
+                    input.set_edit_pos(len(input.get_edit_text()))
+        elif key == "ctrl a":
+            input.set_edit_pos(0)
+        elif key == "ctrl b":
+            input.set_edit_pos(input.edit_pos - 1)
+        elif key == "ctrl d":
+            text = input.get_edit_text()
+            input.set_edit_text(text[0:input.edit_pos] + \
+                                text[input.edit_pos + 1:])
+        elif key == "ctrl e":
+            input.set_edit_pos(len(input.get_edit_text()))
+        elif key == "ctrl f":
+            input.set_edit_pos(input.edit_pos + 1)
+        elif key == "ctrl k":
+            input.set_edit_text(input.get_edit_text()[0:input.edit_pos])
         elif key == "page down":
             self.ui_listbox.keypress(self.display_size, key)
         elif key == "page up":
