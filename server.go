@@ -156,12 +156,12 @@ func packetize(packet_type byte, payload []byte) []byte {
 	buf.Write([]byte{ packet_type })
 	buf.Write(payload)
 
-	var pkt []byte = buf.Bytes()
-	fmt.Printf("tx: ")
-	for i := 5; i < len(pkt); i++ {
-		fmt.Printf("%02x ", pkt[i])
-	}
-	fmt.Printf("\n")
+//	var pkt []byte = buf.Bytes()
+//	fmt.Printf("tx: ")
+//	for i := 5; i < len(pkt); i++ {
+//		fmt.Printf("%02x ", pkt[i])
+//	}
+//	fmt.Printf("\n")
 	return buf.Bytes()
 }
 

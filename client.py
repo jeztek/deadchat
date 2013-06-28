@@ -2,7 +2,6 @@
 
 # TODO:
 # SSL connection to server
-# fix nonces
 # disallow unicode names
 
 from collections import deque
@@ -249,6 +248,8 @@ class DeadChatClient():
         try:
             self.display.run_wrapper(self.run)
         except KeyboardInterrupt:
+            pass
+        finally:
             if self.connected:
                 self.user_disconnect()
             if self.tx_thread:
@@ -515,8 +516,8 @@ class DeadChatClient():
                 if not self.secretbox:
                     self.chatlog_print("Missing room key")
                 else:
-                    # TODO: fix this nonce so it has a unique prefix
-                    nonce = nacl.utils.random(24)
+                    # TODO: ensure nonces are never repeated
+                    nonce = nacl.utils.random(nacl.secret.SecretBox.NONCE_SIZE)
                     enc = self.secretbox.encrypt(text.encode('utf-8'), nonce)
                     self.send_cmd.msg_enc_sharekey(enc)
             else:
@@ -594,7 +595,7 @@ class DeadChatClient():
 
         
     def user_genroomkey(self):
-        self.shared_key = nacl.utils.random(32)
+        self.shared_key = nacl.utils.random(nacl.SecretBox.KEY_SIZE)
         self.secretbox = nacl.secret.SecretBox(self.shared_key)
         if not self.config.has_section("room"):
             self.config.add_section("room")
@@ -606,6 +607,7 @@ class DeadChatClient():
 
     def user_sendroomkey(self, name):
         if self.init_pubkey(name):
+            # TODO: look into nonce prefix
             nonce = nacl.utils.random(nacl.public.Box.NONCE_SIZE)
             enc = self.boxes[name].encrypt(self.shared_key, nonce)
             self.send_cmd.msg_send_sharekey(name, enc)
@@ -622,6 +624,7 @@ class DeadChatClient():
 
     def user_msg(self, name, msg):
         if self.init_pubkey(name):
+            # TODO: look into nonce prefix
             nonce = nacl.utils.random(nacl.public.Box.NONCE_SIZE)
             enc = self.boxes[name].encrypt(msg.encode('utf-8'), nonce)
             self.send_cmd.msg_enc_pubkey(name, enc)
@@ -668,8 +671,8 @@ class DeadChatClient():
 
 
     def svr_msg_encrypted_sharekey(self, sender, data):
-        nonce = data[0:24]
-        enc = data[24:]
+        nonce = data[0:nacl.secret.SecretBox.NONCE_SIZE]
+        enc = data[nacl.secret.SecretBox.NONCE_SIZE:]
         if self.secretbox:
             try:
                 msg = self.secretbox.decrypt(enc, nonce)
