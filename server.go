@@ -59,7 +59,6 @@ const (
 	// Responses from server
 	SVR_NOTICE			// [plaintext message]
 	SVR_MSG				// [sender name length (2)] [sender name] [data]
-	SVR_WHO
 )
 
 type ClientInfo struct {
@@ -230,8 +229,13 @@ func cmd_ident(info *ClientInfo, packet []byte) {
 func cmd_who(info *ClientInfo) {
 	if info.name == "" {
 		svr_notice(info.conn, "please identify yourself")
-//		return -1, nil
-	}
+		return
+	} else {
+		svr_notice(info.conn, "Who:")
+		for key, _ := range clients {
+		    	 svr_notice(info.conn, "  " + key)
+		}
+        }
 }
 
 func main() {

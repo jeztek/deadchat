@@ -93,7 +93,7 @@ class Command():
 
 
 class Response():
-    SVR_NOTICE, SVR_MSG, SVR_WHO, DISCONNECTED = range(4, 8)
+    SVR_NOTICE, SVR_MSG, DISCONNECTED = range(4, 7)
 
     def __init__(self, rtype):
         self.type = rtype
@@ -385,11 +385,6 @@ class DeadChatClient():
                     data = rx[8+namelen+1:]
                     self.svr_msg_encrypted_pubkey(name, data)
 
-            # SVR_WHO
-            elif rxtype == Response.SVR_WHO:
-                # TODO
-                pass
-
 
     def parse_user_input(self, text):
         if string.find(text, "/help") == 0:
@@ -398,6 +393,7 @@ class DeadChatClient():
 /quit                   Exit program
 /connect                Connect to server
 /disconnect             Disconnect from server
+/who                    List users in room
 
 /createid <name>        Create identity and associated keys
 /reqidexch <name>       Request id key exchange
@@ -442,6 +438,13 @@ class DeadChatClient():
             else:
                 self.chatlog_print("Not connected")
 
+        # /who
+        elif string.find(text, "/who") == 0:
+            if self.connected:
+                self.send_cmd.who()
+            else:
+                self.chatlog_print("Not connected")
+
         # /genroomkey
         elif string.find(text, "/genroomkey") == 0:
             self.user_genroomkey()
@@ -449,7 +452,7 @@ class DeadChatClient():
         # /reqroomkey
         elif string.find(text, "/reqroomkey") == 0:
             if self.connected:
-                self.user_reqroomkey()
+                self.send_cmd.msg_req_sharekey()
             else:
                 self.chatlog_print("Not connected")
 
@@ -573,7 +576,7 @@ class DeadChatClient():
         self.sock.close()
         self.chatlog_print("Disconnected from server")
 
-
+        
     def user_genroomkey(self):
         self.shared_key = nacl.utils.random(32)
         self.secretbox = nacl.secret.SecretBox(self.shared_key)
@@ -583,10 +586,6 @@ class DeadChatClient():
         with open("deadchat.cfg", "wb") as configfile:
             self.config.write(configfile)
         self.chatlog_print("Room key generated")
-
-
-    def user_reqroomkey(self):
-        self.send_cmd.msg_req_sharekey()
 
 
     def user_sendroomkey(self, name):
