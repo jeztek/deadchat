@@ -434,7 +434,13 @@ class DeadChatClient():
             host = None
             port = None
             connstr = text.split(" ")
-            if len(connstr) == 2:
+            if len(connstr) == 1:
+                self.config.read("deadchat.cfg")
+                if self.config.has_section("server"):
+                    host = self.config.get("server", "host")
+                    port = int(self.config.get("server", "port"))
+                    self.chatlog_print(host + " " + str(port))
+            elif len(connstr) == 2:
                 host = connstr[1]
                 port = 6150
             elif len(connstr) >= 3:
@@ -583,6 +589,14 @@ class DeadChatClient():
 
             self.connected = True
             self.chatlog_print("Connected to " + host)
+
+            self.config.read("deadchat.cfg")
+            if not self.config.has_section("server"):
+                self.config.add_section("server")
+            self.config.set("server", "host", host)
+            self.config.set("server", "port", port)
+            with open("deadchat.cfg", "wb") as configfile:
+                self.config.write(configfile)
 
         except Exception as e:
             self.chatlog_print("Unable to connect to " + host + \
