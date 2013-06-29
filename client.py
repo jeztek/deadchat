@@ -248,8 +248,6 @@ class DeadChatClient():
         try:
             self.display.run_wrapper(self.run)
         except KeyboardInterrupt:
-            pass
-        finally:
             if self.connected:
                 self.user_disconnect()
             if self.tx_thread:
@@ -571,7 +569,7 @@ class DeadChatClient():
                         base64.b64encode(self.id_private_key.encode()))
         self.config.set("id", "id_public_key", \
                         base64.b64encode(self.id_public_key.encode()))
-        self.config.set("id", "name", self.name)
+        self.config.set("id", "name", self.name.encode('utf-8'))
         with open("deadchat.cfg", "wb") as configfile:
             self.config.write(configfile)
 
