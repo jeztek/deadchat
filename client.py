@@ -437,7 +437,9 @@ class DeadChatClient():
                 if self.config.has_section("server"):
                     host = self.config.get("server", "host")
                     port = int(self.config.get("server", "port"))
-                    self.chatlog_print(host + " " + str(port))
+                else:
+                    self.chatlog_print("Missing host and/or port")
+                    return
             elif len(connstr) == 2:
                 host = connstr[1]
                 port = 6150
