@@ -612,7 +612,7 @@ class DeadChatClient():
 
         
     def user_genroomkey(self):
-        self.shared_key = nacl.utils.random(nacl.SecretBox.KEY_SIZE)
+        self.shared_key = nacl.utils.random(nacl.secret.SecretBox.KEY_SIZE)
         self.secretbox = nacl.secret.SecretBox(self.shared_key)
         if not self.config.has_section("room"):
             self.config.add_section("room")
