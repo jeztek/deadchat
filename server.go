@@ -83,7 +83,7 @@ func client(c net.Conn) {
 	br := bufio.NewReader(c)
 
 	packet, err := readPacket(br)
-	if packet[0] != CMD_IDENT {
+	if (err != nil) || (packet[0] != CMD_IDENT) {
 		return
 	}
 	ok := cmd_ident(&info, packet[1:])
