@@ -395,7 +395,7 @@ class DeadChatClient():
 /who                    List users in room
 
 /createid <name>        Create identity and associated keys
-/idexch <name>          Request id key exchange
+/idexch <name>          Exchange id keys
 
 /genroomkey             Generate a secret key for the room
 /reqroomkey             Request the secret key from the room
@@ -415,7 +415,10 @@ class DeadChatClient():
         elif string.find(text, "/createid") == 0:
             idstr = text.split(" ")
             if len(idstr) > 1:
-                self.user_createid(idstr[1])
+                if self.connected:
+                    self.chatlog_print("Disconnect prior to changing id")
+                else:
+                    self.user_createid(idstr[1])
             else:
                 self.chatlog_print("Missing name")
 
@@ -563,6 +566,9 @@ class DeadChatClient():
         self.id_private_key = key
         self.id_public_key = key.public_key
 
+        # Reset existing public key box instances
+        self.boxes = {}
+
         self.ui_status.set_text("deadchat - " + self.name)
         self.chatlog_print("Created identity " + self.name)
         if not self.config.has_section("id"):
@@ -630,7 +636,7 @@ class DeadChatClient():
             self.send_cmd.msg_send_sharekey(name, enc)
             self.chatlog_print("Sent room key to " + name)
         else:
-            self.chatlog_print("No key for " + name + ", run /idexch first")
+            self.chatlog_print("No key for user, run \"/idexch %s\" first to exchange keys" % name)
 
 
     def user_idexch(self, name):
@@ -647,7 +653,7 @@ class DeadChatClient():
             self.send_cmd.msg_enc_pubkey(name, enc)
             self.chatlog_print("[%s => %s] %s" % (self.name, name, msg))
         else:
-            self.chatlog_print("No key for " + name + ", run /idexch first")
+            self.chatlog_print("No key for user, run \"/idexch %s\" first to exchange keys" % name)
 
 
     def init_pubkey(self, name):
@@ -672,19 +678,22 @@ class DeadChatClient():
 
     def svr_msg_send_sharekey(self, sender, data):
         if self.init_pubkey(sender):
-            nonce = data[0:nacl.public.Box.NONCE_SIZE]
-            enc = data[nacl.public.Box.NONCE_SIZE:]
-            self.shared_key = self.boxes[sender].decrypt(enc, nonce)
-            self.secretbox = nacl.secret.SecretBox(self.shared_key)
-            if not self.config.has_section("room"):
-                self.config.add_section("room")
-            self.config.set("room", "room_key", base64.b64encode(self.shared_key))
-            with open("deadchat.cfg", "wb") as configfile:
-                self.config.write(configfile)
-            self.chatlog_print(sender + " has sent you the room key")
-        else:
-            self.chatlog_print("Received room key from " + sender + \
-                               " but unable to decrypt, run /idexch")
+            try:
+                nonce = data[0:nacl.public.Box.NONCE_SIZE]
+                enc = data[nacl.public.Box.NONCE_SIZE:]
+                self.shared_key = self.boxes[sender].decrypt(enc, nonce)
+                self.secretbox = nacl.secret.SecretBox(self.shared_key)
+                if not self.config.has_section("room"):
+                    self.config.add_section("room")
+                self.config.set("room", "room_key", base64.b64encode(self.shared_key))
+                with open("deadchat.cfg", "wb") as configfile:
+                    self.config.write(configfile)
+                self.chatlog_print(sender + " has sent you the room key")
+                return
+            except nacl.exceptions.CryptoError:
+                pass
+        self.chatlog_print("Received room key from " + sender + \
+                           " but unable to decrypt, run /idexch")
 
 
     def svr_msg_encrypted_sharekey(self, sender, data):
@@ -702,6 +711,8 @@ class DeadChatClient():
 
     # Received request for my public key
     def svr_msg_request_pubkey(self, sender, data):
+        self.chatlog_print("Received id key request from " + sender)
+
         # store key from sender
         if not self.config.has_section("keys"):
             self.config.add_section("keys")
@@ -712,7 +723,10 @@ class DeadChatClient():
         # TODO: handle if public_key not set
         key = self.id_public_key.encode()
         self.send_cmd.msg_send_pubkey(sender, key)
-        self.chatlog_print("Received id key request from " + sender)
+
+        # Delete existing box
+        if self.boxes.has_key(sender):
+            self.boxes.pop(sender)
 
 
     # Received requested public key from sender
@@ -726,15 +740,23 @@ class DeadChatClient():
             self.config.write(configfile)
         self.chatlog_print("id key exchange with " + sender + " complete")
 
+        # Delete existing box
+        if self.boxes.has_key(sender):
+            self.boxes.pop(sender)
+
 
     def svr_msg_encrypted_pubkey(self, sender, data):
         if self.init_pubkey(sender):
-            nonce = data[0:nacl.public.Box.NONCE_SIZE]
-            enc = data[nacl.public.Box.NONCE_SIZE:]
-            msg = self.boxes[sender].decrypt(enc, nonce)
-            self.chatlog_print("[%s => %s] %s" % (sender, self.name, msg))
+            try:
+                nonce = data[0:nacl.public.Box.NONCE_SIZE]
+                enc = data[nacl.public.Box.NONCE_SIZE:]
+                msg = self.boxes[sender].decrypt(enc, nonce)
+                self.chatlog_print("[%s => %s] %s" % (sender, self.name, msg))
+                return
+            except nacl.exceptions.CryptoError:
+                self.chatlog_print("[%s => %s] ( WARNING: Unable to decrypt. One of you may have changed keys or might be an imposter.  Run /idexch if you trust this person. )" % (sender, self.name))
         else:
-            self.chatlog_print("[%s => %s] ( unable to decrypt, run /idexch )" % (sender, self.name))
+            self.chatlog_print("[%s => %s] ( Message from unknown user, run \"/idexch %s\" to exchange keys )" % (sender, self.name, sender))
 
         
 def main():
