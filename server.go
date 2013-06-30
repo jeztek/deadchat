@@ -81,48 +81,66 @@ func client(c net.Conn) {
 	info.conn = c
 
 	br := bufio.NewReader(c)
+
+	packet, err := readPacket(br)
+	if packet[0] != CMD_IDENT {
+		return
+	}
+	ok := cmd_ident(&info, packet[1:])
+	if ok {
+		fmt.Printf("user %s identified\n", info.name)
+	} else {
+		return
+	}
 	
 	for {
-		// Drop bytes preceding HEADER_BYTE
-		_, err := br.ReadBytes(HEADER_BYTE)
+		packet, err = readPacket(br)
 		if err != nil {
 			break
 		}
-
-		// Get packet length field
-		packet := make([]byte, 4)
-		read_bytes := 0
-		for read_bytes < 4 {
-			tmp := make([]byte, 4)
-			nread, err := br.Read(tmp)
-			if err != nil {
-				break
-			}
-			copy(packet[read_bytes:], tmp[:nread])
-			read_bytes += nread
-		}
-		pktlen := int(binary.BigEndian.Uint32(packet))
-
-		// Get rest of packet
-		packet = make([]byte, pktlen)
-		read_bytes = 0
-		for read_bytes < pktlen {
-			tmp := make([]byte, pktlen)
-			nread, err := br.Read(tmp)
-			if err != nil {
-				break
-			}
-			copy(packet[read_bytes:], tmp[:nread])
-			read_bytes += nread
-		}
-
-		// Parse
 		parse(&info, packet)
 	}
 
 	// On disconnet
 	svr_notice_all(info.name + " disconnected")
+	fmt.Printf("%v disconnected\n", info.name)
 	delete(clients, info.name)
+}
+ 
+func readPacket(br *bufio.Reader) ([]byte, error) {
+	// Drop bytes preceding HEADER_BYTE
+	_, err := br.ReadBytes(HEADER_BYTE)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get packet length field
+	packet := make([]byte, 4)
+	read_bytes := 0
+	for read_bytes < 4 {
+		tmp := make([]byte, 4)
+		nread, err := br.Read(tmp)
+		if err != nil {
+			return nil, err
+		}
+		copy(packet[read_bytes:], tmp[:nread])
+		read_bytes += nread
+	}
+	pktlen := int(binary.BigEndian.Uint32(packet))
+
+	// Get rest of packet
+	packet = make([]byte, pktlen)
+	read_bytes = 0
+	for read_bytes < pktlen {
+		tmp := make([]byte, pktlen)
+		nread, err := br.Read(tmp)
+		if err != nil {
+			return nil, err
+		}
+		copy(packet[read_bytes:], tmp[:nread])
+		read_bytes += nread
+	}
+	return packet, nil
 }
 
 // Parse incoming packet
@@ -139,9 +157,6 @@ func parse(info *ClientInfo, packet []byte) {
 		cmd_msgall(info, packet[1:])
 	case cmd == CMD_MSGTO:
 		cmd_msgto(info, packet[1:])
-	case cmd == CMD_IDENT:
-		cmd_ident(info, packet[1:])
-		fmt.Printf("user %s identified\n", info.name)
 	case cmd == CMD_WHO:
 		cmd_who(info)
 	default:
@@ -209,21 +224,22 @@ func cmd_msgto(info *ClientInfo, packet []byte) (int, error) {
 	return c.Write(packetize(byte(SVR_MSG), buf.Bytes()))
 }
 
-func cmd_ident(info *ClientInfo, packet []byte) {
+func cmd_ident(info *ClientInfo, packet []byte) bool {
 	name := string(packet)
 
 	if len(name) > MAX_NAME_LENGTH {
 		svr_notice(info.conn, "invalid name")
-		return
+		return false
 	}
 
 	if !clients.Add(name, info.conn) {
 		svr_notice(info.conn, name + " is already in use")
-		return
+		return false
 	}
 
 	svr_notice_all(name + " connected")
 	info.name = name
+	return true
 }
 
 func cmd_who(info *ClientInfo) {
