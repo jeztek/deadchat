@@ -14,6 +14,7 @@ import select
 import string
 import struct
 import threading
+import time
 import Queue
 import urwid
 import urwid.curses_display
@@ -342,7 +343,8 @@ class DeadChatClient():
 
 
     def chatlog_print(self, text):
-        self.chatlog.append(urwid.Text(text))
+        timestamp = time.strftime("%H:%M")
+        self.chatlog.append(urwid.Text(timestamp + " " + text))
         self.ui_listbox.set_focus(self.ui_listbox.get_focus()[1] + 1, \
                                   coming_from='below')
 
