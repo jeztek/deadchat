@@ -1,11 +1,6 @@
 #!/usr/bin/env python
 
-# TODO:
-# SSL connection to server
-# disallow unicode names
-
 from collections import deque
-
 import sys
 import base64
 import logging
