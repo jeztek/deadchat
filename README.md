@@ -3,7 +3,15 @@ deadchat
 
 ### About
 
-*deadchat* is a cryptographically secure single-room group chat server and client.  It features end-to-end encryption where messages are encrypted and decrypted at the end points such that malicious machines on the network cannot eavesdrop on the conversation, including the chat server.
+*deadchat* is a cryptographically secure single-room group chat server and client designed to enable a group of trusted friends to communicate with each other over an insecure channel without fear of eavesdropping.  
+
+*deadchat* features end-to-end encryption where messages are encrypted and decrypted at the end points such that the server and malicious machines on the network cannot eavesdrop on the conversation.
+
+It is assumed that a member of the trusted group will operate the server.
+
+### DISCLAIMER
+
+This work represents an endeavor to implement the functionality outlined above.  It is still a work in progress and is not recommended for use unless you intend to help make improvements.
 
 ### Usage
 
