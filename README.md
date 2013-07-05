@@ -35,7 +35,8 @@ Run server.go on a server and connect to it with client.py.  The client supports
 
 ### Todo
 
-* Support SSL connections to server
+* Support SSL connections from client to server
+* User authentication
 * Disallow unicode usernames
 * Implement client in Go
 * Encrypt deadchat.cfg file
