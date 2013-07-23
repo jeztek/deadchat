@@ -6,6 +6,7 @@ import base64
 import logging
 import socket
 import select
+import ssl
 import string
 import struct
 import threading
@@ -142,6 +143,7 @@ class ReceiveThread(threading.Thread):
                     read_bytes = 0
                     packet = ""
                     have_pktlen = False
+                    header_index = 0
                     # Receive data until we have length field from packet
                     while not have_pktlen:
                         tmp = sock.recv(4096)
@@ -152,7 +154,7 @@ class ReceiveThread(threading.Thread):
                         else:
                             packet += tmp
                             read_bytes += len(tmp)
-                            header_index = tmp.find('\xde')
+                            header_index = packet.find('\xde')
                             if header_index + 4 <= read_bytes:
                                 have_pktlen = True
 
@@ -581,7 +583,11 @@ class DeadChatClient():
         
     def user_connect(self, host, port):
         try:
-            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.sock = ssl.wrap_socket(s,
+                                        # ca_certs = "",
+                                        # cert_reqs=ssl.CERT_REQUIRED
+                                        )
             self.sock.connect((host, port))
 
             self.tx_thread = TransmitThread(self.sock, self.txq)
@@ -603,7 +609,7 @@ class DeadChatClient():
 
         except Exception as e:
             self.chatlog_print("Unable to connect to " + host + \
-                               " on port " + str(port))
+                               " on port " + str(port) + ", " + str(e))
         
 
     def user_disconnect(self):
@@ -751,7 +757,7 @@ class DeadChatClient():
                 self.chatlog_print("[%s => %s] %s" % (sender, self.name, msg))
                 return
             except nacl.exceptions.CryptoError:
-                self.chatlog_print("[%s => %s] ( WARNING: Unable to decrypt. One of you may have changed keys or might be an imposter.  Run /idexch if you trust this person. )" % (sender, self.name))
+                self.chatlog_print("[%s => %s] ( WARNING: Unable to decrypt. One of you may have changed keys or might be an imposter. )" % (sender, self.name))
         else:
             self.chatlog_print("[%s => %s] ( Message from unknown user, run \"/idexch %s\" to exchange keys )" % (sender, self.name, sender))
 

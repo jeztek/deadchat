@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
+	"crypto/rand"
 	"encoding/binary"
 	"flag"
 	"fmt"
@@ -94,6 +96,7 @@ func client(c net.Conn) {
 	for {
 		packet, err = readPacket(br)
 		if err != nil {
+			error_(err, -1)
 			break
 		}
 		parse(&info, packet)
@@ -169,12 +172,12 @@ func packetize(packet_type byte, payload []byte) []byte {
 	buf.Write([]byte{ packet_type })
 	buf.Write(payload)
 
-//	var pkt []byte = buf.Bytes()
-//	fmt.Printf("tx: ")
-//	for i := 5; i < len(pkt); i++ {
-//		fmt.Printf("%02x ", pkt[i])
-//	}
-//	fmt.Printf("\n")
+	// var pkt []byte = buf.Bytes()
+	// fmt.Printf("tx: ")
+	// for i := 0; i < len(pkt); i++ {
+	// 	fmt.Printf("%02x ", pkt[i])
+	// }
+	// fmt.Printf("\n")
 	return buf.Bytes()
 }
 
@@ -267,12 +270,19 @@ func main() {
 		return
 	}
 
-	fmt.Printf("Listening for clients on port %v\n", port)
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%v", port))
+	cert, err := tls.LoadX509KeyPair("cert.pem", "key.pem")
 	if err != nil {
 		error_(err, 1)
 	}
 
+	config := tls.Config{Certificates: []tls.Certificate{cert}}
+	config.Rand = rand.Reader
+	lis, err := tls.Listen("tcp", fmt.Sprintf(":%v", port), &config)
+	if err != nil {
+		error_(err, 1)
+	}
+	fmt.Printf("Listening for clients on port %v\n", port)
+	
 	for {
 		c, err := lis.Accept()
 		if err != nil {
