@@ -34,8 +34,7 @@ Run server.go on a server and connect to it with client.py.  The client supports
 ```
 
 ### Todo
-
-* Support SSL connections from client to server
+* Enable validation of TLSv1 cert by client
 * User authentication
 * Disallow unicode usernames
 * Implement client in Go
@@ -44,8 +43,9 @@ Run server.go on a server and connect to it with client.py.  The client supports
 ### Implementation
 
 * *deadchat* is meant to run in a terminal (think IRC)
-* Authenticated encryption is provided by [libsodium] (https://github.com/jedisct1/libsodium)
-* *deadchat* uses public key cryptography for private messaging and room secret key exchange
+* Client to server communication is encrypted using TLSv1
+* Authenticated encryption between clients is provided by [libsodium] (https://github.com/jedisct1/libsodium)
+* Public key cryptography is used for private messaging and room secret key exchange
 * Group chat is encrypted using secret key cryptography
 * Keys are stored in deadchat.cfg
 
