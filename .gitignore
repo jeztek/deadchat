@@ -1,5 +1,9 @@
 *~
 #*
+cert.pem
+key.pem
+deadchat.cfg
+deadchat.log
 
 # Compiled Object files, Static and Dynamic libs (Shared Objects)
 *.o
