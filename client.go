@@ -2,7 +2,7 @@ package main
 
 import (
 	"bytes"
-	"flag"
+//	"flag"
 	"fmt"
 	"github.com/nsf/termbox-go"
 	"os"
@@ -12,26 +12,18 @@ import (
 
 type ChatLog []string
 
-
-
 type DeadChatClient struct {
 	ui_width int
 	ui_height int
 	ui_input bytes.Buffer
+
 	chatlog ChatLog
+	chatlog_page int
 }
 
 var client DeadChatClient
 
 func init() {
-	err := termbox.Init()
-	if err != nil {
-		error_(err, -1)
-	}
-	defer termbox.Close()
-
-	client.ui_width, client.ui_height = termbox.Size()
-	client.chatlog = make([]string, client.ui_height)
 }
 
 func error_(err error, r int) {
@@ -46,6 +38,7 @@ func ui_print(x, y int, msg string, fg, bg termbox.Attribute) {
 		termbox.SetCell(x, y, c, fg, bg)
 		x += 1
 	}
+	termbox.SetCursor(x, y)
 }
 
 func ui_draw_banner(msg string) {
@@ -55,9 +48,16 @@ func ui_draw_banner(msg string) {
 	ui_print(0, client.ui_height-2, msg, termbox.ColorBlack, termbox.ColorCyan)
 }
 
+func ui_draw_chatlog() {
+	for i, line := range client.chatlog {
+		ui_print(0, i, line, termbox.ColorWhite, termbox.ColorBlack)
+	}
+}
+
 func ui_draw() {
+	ui_draw_chatlog()
 	ui_draw_banner("deadchat")
-	ui_print(0, client.ui_height-1, ">> " + client.ui_input.String(), termbox.ColorWhite, termbox.ColorBlack)	
+	ui_print(0, client.ui_height-1, ">> " + client.ui_input.String(), termbox.ColorWhite, termbox.ColorBlack)
 }
 
 func ui_keypress(ev *termbox.Event) {
@@ -68,6 +68,8 @@ func ui_keypress(ev *termbox.Event) {
 			client.ui_input.Truncate(len-1)
 		}
 	case 10, 13:
+		line := client.ui_input.String()
+		client.chatlog = append(client.chatlog, line)
 		client.ui_input.Reset()
 	default:
 		client.ui_input.WriteRune(ev.Ch)
@@ -96,13 +98,15 @@ loop:
 }
 
 func main() {
-	var (
-		help bool
-	)
-	if help {
-		flag.Usage()
-		return
+	err := termbox.Init()
+	if err != nil {
+		error_(err, -1)
 	}
+	defer termbox.Close()
+
+	client.ui_width, client.ui_height = termbox.Size()
+	client.chatlog = make([]string, client.ui_height)
+	client.chatlog_page = 0
 
 	ui_loop()
 }
