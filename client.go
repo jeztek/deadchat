@@ -5,6 +5,7 @@ import (
 //	"flag"
 	"fmt"
 	"github.com/nsf/termbox-go"
+	"log"
 	"os"
 //	"unicode/utf8"
 //	"strconv"
@@ -22,12 +23,15 @@ type DeadChatClient struct {
 }
 
 var client DeadChatClient
+var logger *log.Logger
 
 func init() {
 }
 
 func error_(err error, r int) {
 	fmt.Printf("Error: %v\n", err)
+	logger.Printf("Error: %v\n", err)
+
 	if r >= 0 {
 		os.Exit(r)
 	}
@@ -98,14 +102,21 @@ loop:
 }
 
 func main() {
-	err := termbox.Init()
+	f, err := os.Create("deadchat.log")
+	if err != nil {
+		error_(err, -1)
+	}
+	logger = log.New(f, "", log.LstdFlags)
+	logger.Println("Init")
+
+	err = termbox.Init()
 	if err != nil {
 		error_(err, -1)
 	}
 	defer termbox.Close()
 
 	client.ui_width, client.ui_height = termbox.Size()
-	client.chatlog = make([]string, client.ui_height)
+	client.chatlog = make([]string, 0, client.ui_height)
 	client.chatlog_page = 0
 
 	ui_loop()
